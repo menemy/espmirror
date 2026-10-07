@@ -1,0 +1,36 @@
+name: Add a device
+description: Ask for a device profile, or offer one
+title: "Device: "
+labels: [device]
+body:
+  - type: input
+    id: device
+    attributes:
+      label: The device
+      description: Maker and model, and the exact name your firmware passes in espmirror_config_t.name
+      placeholder: Waveshare ESP32-S3-Touch-AMOLED-1.8, name "Waveshare 1.8"
+    validations:
+      required: true
+  - type: input
+    id: drawing
+    attributes:
+      label: Dimensional drawing
+      description: A link to the maker's drawing with the body, the screen's active area and the buttons in millimetres
+    validations:
+      required: true
+  - type: textarea
+    id: buttons
+    attributes:
+      label: Buttons and LED
+      description: Which edge each button is on, what it does, and which key code (1, 2, 3) your firmware maps it to; the LED's place and colour
+  - type: textarea
+    id: photo
+    attributes:
+      label: Photo
+      description: A photo of the device from the front, straight on
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Can you test?
+      options:
+        - label: I have the board and can run the viewer against it

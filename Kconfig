@@ -1,0 +1,61 @@
+menu "espmirror"
+
+    config ESPMIRROR_PORT
+        int "TCP port the viewer connects to"
+        default 7331
+
+    config ESPMIRROR_FRAME_MS
+        int "Shortest interval between two frames, ms"
+        default 40
+        help
+            The mirror task collects the changed rectangles and sends them at most
+            this often. 40 ms is 25 frames a second at best; a slower pace costs
+            less CPU and Wi-Fi.
+
+    config ESPMIRROR_AUDIO
+        bool "Audio: let the viewer hear the microphone or the speaker"
+        default y
+        help
+            espmirror_audio_capture() and espmirror_audio_playback() copy what the
+            board hears and plays into a ring the viewer can listen to, and the
+            viewer may send its own microphone back through the on_talk callbacks.
+            Off, those calls compile to nothing.
+
+    config ESPMIRROR_AUDIO_RING_KB
+        int "Audio ring, KB"
+        depends on ESPMIRROR_AUDIO
+        default 16
+        help
+            16 KB holds half a second of 16 kHz mono PCM16; the viewer catches up
+            from the newest quarter second when it falls behind.
+
+    config ESPMIRROR_MSG_KB
+        int "Frame message buffer, KB"
+        range 8 64
+        default 32
+        help
+            One frame goes out as one message; what does not fit waits for the
+            next. 32 KB carries a whole 128 x 128 screen raw. Smaller saves RAM
+            on a chip without PSRAM and costs a few more messages per big change.
+
+    config ESPMIRROR_TASK_STACK
+        int "Mirror task stack, bytes"
+        default 4096
+
+    config ESPMIRROR_TASK_PRIORITY
+        int "Mirror task priority"
+        default 3
+
+    config ESPMIRROR_TASK_CORE
+        int "Mirror task core (-1 any)"
+        default -1
+
+    config ESPMIRROR_PREFER_PSRAM
+        bool "Keep the screen copy and the buffers in PSRAM when there is some"
+        default y
+        help
+            The screen copy is width x height x 2 bytes (150 KB for 320 x 240); the
+            message buffer 32 KB; the audio ring as configured. With this on they
+            go to PSRAM when the chip has it and to internal RAM otherwise.
+
+endmenu

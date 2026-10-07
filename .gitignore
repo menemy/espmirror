@@ -1,0 +1,24 @@
+# drafts that stay on this machine
+POST.md
+notes/
+
+# ESP-IDF
+build/
+build-*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+examples/*/build/
+examples/*/managed_components/
+examples/*/dependencies.lock
+examples/*/sdkconfig
+examples/*/sdkconfig.old
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

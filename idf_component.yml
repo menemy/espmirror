@@ -1,0 +1,20 @@
+version: "0.1.0"
+description: "Live screen, keys, LED and audio of an ESP32 board on your desk, over TCP, with a desktop viewer that draws the real device"
+url: "https://github.com/menemy/espmirror"
+repository: "https://github.com/menemy/espmirror.git"
+documentation: "https://github.com/menemy/espmirror#readme"
+issues: "https://github.com/menemy/espmirror/issues"
+license: "Apache-2.0"
+tags:
+  - display
+  - lvgl
+  - debug
+  - mirror
+  - remote
+dependencies:
+  idf: ">=5.1"
+files:
+  exclude:
+    - "examples/**/build/**"
+    - "tools/.venv/**"
+    - "docs/*.mp4"

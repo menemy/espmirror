@@ -1,0 +1,65 @@
+/*
+ * espmirror: the LVGL 9 hook.
+ *
+ * Copyright (c) 2026 Maksim Nagaev
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <string.h>
+
+#include "esp_log.h"
+#include "espmirror.h"
+#include "espmirror_lvgl.h"
+#include "lvgl.h"
+
+static const char *TAG = "espmirror";
+
+/* LVGL announces each flush before the display's callback gets it; at that
+ * moment the active draw buffer holds the area as rendered, at the buffer's
+ * stride: the whole screen when the buffer is that big (direct and full
+ * modes), the area alone otherwise (partial mode). RGB565 in native order, or
+ * byte-swapped when the display was set up to render for its panel; a copy
+ * either way, the buffer is left as it is. */
+static void flush_start(lv_event_t *e) {
+    lv_display_t *disp = lv_event_get_target(e);
+    const lv_area_t *area = lv_event_get_param(e);
+    lv_draw_buf_t *buf = lv_display_get_buf_active(disp);
+    if (!buf || !area) return;
+    bool swapped = buf->header.cf == LV_COLOR_FORMAT_RGB565_SWAPPED;
+    if (buf->header.cf != LV_COLOR_FORMAT_RGB565 && !swapped) return;
+    int sw, sh;
+    espmirror_size(&sw, &sh);
+    uint16_t *fb = espmirror_frame_begin();
+    if (!fb) return;
+    int w = lv_area_get_width(area), h = lv_area_get_height(area);
+    bool whole = buf->header.w >= sw && buf->header.h >= sh;
+    int x0 = area->x1 < 0 ? 0 : area->x1, x1 = area->x2 >= sw ? sw - 1 : area->x2;
+    for (int y = 0; y < h && x1 >= x0; y++) {
+        int ty = area->y1 + y;
+        if (ty < 0 || ty >= sh) continue;
+        const uint8_t *row = buf->data + (whole ? ty : y) * buf->header.stride + (whole ? x0 : x0 - area->x1) * 2;
+        uint16_t *to = fb + ty * sw + x0;
+        if (!swapped) {
+            memcpy(to, row, (x1 - x0 + 1) * 2);
+        } else {
+            for (int i = 0; i <= x1 - x0; i++) to[i] = (uint16_t)(row[2 * i] << 8 | row[2 * i + 1]);
+        }
+    }
+    espmirror_frame_end(area->x1, area->y1, w, h);
+}
+
+esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
+    if (!disp) disp = lv_display_get_default();
+    if (!disp) return ESP_ERR_INVALID_STATE;
+    int sw, sh;
+    espmirror_size(&sw, &sh);
+    if (!sw) return ESP_ERR_INVALID_STATE;
+    if (lv_display_get_horizontal_resolution(disp) != sw || lv_display_get_vertical_resolution(disp) != sh) {
+        ESP_LOGW(TAG, "the display is %d x %d, the mirror %d x %d", (int)lv_display_get_horizontal_resolution(disp),
+                 (int)lv_display_get_vertical_resolution(disp), sw, sh);
+    }
+    lv_display_add_event_cb(disp, flush_start, LV_EVENT_FLUSH_START, NULL);
+    lv_obj_invalidate(lv_display_get_screen_active(disp));   /* the whole screen once, for the copy */
+    ESP_LOGI(TAG, "on the LVGL flush");
+    return ESP_OK;
+}

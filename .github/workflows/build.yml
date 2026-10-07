@@ -1,0 +1,33 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  examples:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        idf: ["v5.4", "v6.0"]
+        example: [basic, lvgl]
+        target: [esp32s3, esp32]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ matrix.idf }}
+          target: ${{ matrix.target }}
+          path: examples/${{ matrix.example }}
+
+  viewer:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m py_compile tools/mirror_window.py
