@@ -1,1 +1,10 @@
-idf_component_register(SRCS "main.c" INCLUDE_DIRS "." PRIV_REQUIRES esp_timer esp_event nvs_flash esp_netif protocol_examples_common)
+set(reqs esp_timer esp_event nvs_flash esp_netif protocol_examples_common esp_lcd espressif__esp_codec_dev)
+# The peripheral drivers moved out of "driver" in ESP-IDF 5.3; name whichever this IDF has.
+idf_build_get_property(major IDF_VERSION_MAJOR)
+idf_build_get_property(minor IDF_VERSION_MINOR)
+if(major GREATER 5 OR (major EQUAL 5 AND minor GREATER_EQUAL 3))
+    list(APPEND reqs esp_driver_gpio esp_driver_ledc esp_driver_spi esp_driver_i2s esp_driver_i2c)
+else()
+    list(APPEND reqs driver)
+endif()
+idf_component_register(SRCS "main.c" "board_aipi_lite.c" INCLUDE_DIRS "." PRIV_REQUIRES ${reqs})

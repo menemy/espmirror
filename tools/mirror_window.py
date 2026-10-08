@@ -12,7 +12,7 @@ MirrorClient speaks it; Screen keeps the pixels (RGB565, numpy) and applies fram
 its look from DEVICES: the body, the keys and where they are, the LED; a board without a profile gets a plain
 frame around its screen. New devices are a line in DEVICES (docs/devices.md).
 
-The glass is the touch; the handle at the bottom left drags the window, the one at the bottom right resizes it,
+The glass is the touch; the body and the handle at the bottom left drag the window, the one at the bottom right resizes it,
 keeping the device's proportions; View > Actual size is the device's real size on the display the window is on.
 Above the device: talk, sound, record, screenshot and close. Recordings (mp4, through ffmpeg) and screenshots go
 to the Desktop as mirror-<time>.*, the path is printed. One line a second of statistics goes to stdout.
@@ -53,26 +53,43 @@ DEVICES = [
     # White plastic box, the three round buttons on the top edge: KEY, PWR, BOOT.
     # The body's margin around the screen is drawn at 2.8 mm, under the drawing's 3.5: the owner's eye.
     ("2.16", dict(screen_mm=38.99, body=dict(shape="rect", w=44.6, h=44.6, x=2.8, y=2.8, r=5.5, finish="white"),
-                  glass=dict(border=2.15, r=4.5),
-                  keys=[("key3", 1, "top", 12.3, 5.3), ("pwr", 3, "top", 22.3, 5.3), ("boot", 2, "top", 32.3, 5.3)], hold=False)),
+                  glass=dict(border=2.15, r=4.5), photo=dict(file="devices/waveshare-2.16.png", screen=(54, 54, 801, 807)),
+                  keys=[("key3", 1, "top", 12.3, 5.3), ("pwr", 3, "top", 22.3, 5.3), ("boot", 2, "top", 32.3, 5.3)], hold=True)),
     # White plastic box, taller than wide, the panel in its upper part; two keys low on the right edge. BOOT held
     # is push-to-talk; PWR tapped pages, held a second rotates: both sent as they happen.
     # Its green LED shows low on the left, at about seven o'clock on the body. The 2.16's charge LED is inside.
     ("1.54G", dict(screen_mm=27.8, body=dict(shape="rect", w=39.8, h=53.0, x=6.0, y=10.9, r=4.5, finish="white"),
-                   glass=dict(border=0.8, r=0.6), led=(5.5, 46.5, 1.6, (0x30, 0xd0, 0x60)),
+                   glass=dict(border=0.8, r=0.6), led=(5.2, 45.0, 1.6, (0x30, 0xd0, 0x60)),
+                   photo=dict(file="devices/waveshare-1.54g.png", screen=(125, 94, 526, 434)),
                    keys=[("boot", 2, "right", 31.1, 5.5), ("pwr", 3, "right", 41.3, 5.5)], hold=True)),
     # Aluminium disc, two keys on the rim at about 2 and 4 o'clock: the top one is KEY3 (its double click is the
     # PWR press there), the bottom one BOOT.
+    # Waveshare ESP32-S3-Touch-LCD-3.49 in case B: a blue bar, the 172 x 640 panel sideways, 84 x 22.58 mm active;
+    # its three buttons (brightness, power, reset) sit on the back of the case, drawn here on the bottom edge.
+    ("3.49", dict(screen_mm=84.0, body=dict(shape="rect", w=98.5, h=34.8, x=7.25, y=6.11, r=4.0, finish="blue"),
+                  glass=dict(border=3.2, r=2.5), photo=dict(file="devices/waveshare-3.49b.png", screen=(59, 44, 874, 603)),
+                  keys=[("key3", 1, "bottom", 40.0, 5.0), ("pwr", 3, "bottom", 49.0, 5.0)], hold=False)),
+    # Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5: a black case 95.11 x 63.67 mm, R7.3, the 480 x 320 panel's 73.44 x
+    # 48.96 mm active area at 10.84 / 7.34; PWR, RST and BOOT on the bottom edge towards the left.
+    ("3.5", dict(screen_mm=73.44, body=dict(shape="rect", w=95.11, h=63.67, x=10.84, y=7.34, r=7.3, finish="black"),
+                 glass=dict(border=2.5, r=4.0), photo=dict(file="devices/waveshare-p4-3.5.png", screen=(49, 34, 894, 624)),
+                 keys=[("pwr", 3, "bottom", 21.0, 4.0), ("boot", 2, "bottom", 40.0, 4.0)], hold=False)),
     ("1.75C", dict(screen_mm=43.76, body=dict(shape="round", d=55.0, finish="silver"), glass=dict(border=2.6, r=0),
-                   keys=[("key3", 1, "angle", 50, 7.0), ("boot", 2, "angle", 130, 5.0)], hold=False)),
-    # AIPI Lite (XOrigin): a red slab 55.5 x 47.5 x 7.8 mm with a stud hole in each corner, the 1.44" screen up
-    # in the middle, both buttons on the bottom edge (power left, the talk key right), the LED and the mic there
-    # too (from the maker's manual; the owner's unit may be another of its five colours).
+                   photo=dict(file="devices/waveshare-1.75c.png", screen=(86, 85, 693, 684)),
+                   keys=[("key3", 1, "angle", 50, 7.0), ("boot", 2, "angle", 130, 5.0)], hold=True)),
+    # AIPI Lite (XOrigin): a slab 55.5 x 47.5 x 7.8 mm with a stud hole in each corner, the 1.44" screen up in the
+    # middle, both buttons on the bottom edge (power left, the talk key right), the LED and the mic there too
+    # (the maker's manual); the picture is a mock-up made from a photograph of the owner's blue unit.
     ("AIPI", dict(screen_mm=25.9, body=dict(shape="rect", w=55.5, h=47.5, x=14.8, y=5.0, r=5.0, finish="red",
                                            studs=((6.0, 6.0), (49.5, 6.0), (6.0, 41.5), (49.5, 41.5), 2.4)),
+                  photo=dict(file="devices/aipi-lite.png", screen=(216, 70, 458, 398)),
                   glass=dict(border=1.0, r=1.0),
-                  keys=[("pwr", 3, "bottom", 19.0, 4.0), ("boot", 2, "bottom", 38.5, 4.0)], hold=True)),
+                  keys=[("pwr", 3, "face", (17.6, 43.2), 6.2), ("boot", 2, "face", (37.8, 43.2), 6.2)], hold=True)),
 ]
+# A profile may carry photo=dict(file=..., screen=(x, y, w, h)): a front-on photograph of the device with the
+# background cut out (PNG with alpha), scaled so its width is the body's w in millimetres, and the active area's
+# rectangle in the photo's pixels; the live screen goes there, the keys and the LED stay where the millimetres
+# say. Without the file, or with screen None, the body is drawn. Paths are relative to this script.
 GENERIC = dict(screen_mm=None, body=dict(shape="rect", w=None, h=None, x=3.0, y=3.0, r=3.0, finish="white"),
                glass=dict(border=1.5, r=2.0), keys=[], hold=False)
 FINISHES = {
@@ -82,6 +99,10 @@ FINISHES = {
                    key=((0xe2, 0xe2, 0xe5), (0x9e, 0x9e, 0xa4)), key_down=((0xc0, 0xc0, 0xc4), (0x80, 0x80, 0x86))),
     "red": dict(fill=(0xe0, 0x30, 0x2e), fill2=(0xc4, 0x22, 0x22), edge=(0x8e, 0x16, 0x16), shine=.0,
                 key=((0x30, 0x30, 0x32), (0x18, 0x18, 0x1a)), key_down=((0x22, 0x22, 0x24), (0x10, 0x10, 0x12))),
+    "blue": dict(fill=(0x2c, 0x9c, 0xf0), fill2=(0x1f, 0x7f, 0xcc), edge=(0x16, 0x5a, 0x96), shine=.0,
+                 key=((0x2c, 0x9c, 0xf0), (0x1f, 0x7f, 0xcc)), key_down=((0x1f, 0x7f, 0xcc), (0x16, 0x5a, 0x96))),
+    "black": dict(fill=(0x2e, 0x2e, 0x30), fill2=(0x1c, 0x1c, 0x1e), edge=(0x0c, 0x0c, 0x0e), shine=.0,
+                  key=((0x3a, 0x3a, 0x3c), (0x20, 0x20, 0x22)), key_down=((0x28, 0x28, 0x2a), (0x14, 0x14, 0x16))),
 }
 
 def device_profile(name):
@@ -89,6 +110,9 @@ def device_profile(name):
         if fragment in (name or ""):
             return profile
     return GENERIC
+
+
+MSG_CAP = 1 << 20                    # the board's biggest message is its message buffer, 64 KB at most
 
 
 class Screen:
@@ -112,21 +136,33 @@ class Screen:
         np = self.np
         if not frame or frame[0:1] != b"F":
             return []
+        if len(frame) < 8:
+            raise ValueError("a short frame")
         self.state = ("bright", "dim", "dark")[frame[1]] if frame[1] < 3 else self.state
         n, w, h = struct.unpack_from("<HHH", frame, 2)
+        if not w or not h:
+            raise ValueError("a frame with no size")
         self._size(w, h)
         o, rects = 8, []
-        for _ in range(n):
+        for _ in range(n):                           # every field is the board's word: checked before numpy sees it
+            if o + 14 > len(frame):
+                raise ValueError("a frame shorter than its rectangles")
             x, y, rw, rh, enc, _, ln = struct.unpack_from("<HHHHBBI", frame, o)
             o += 14
+            if not rw or not rh or x + rw > w or y + rh > h or o + ln > len(frame) or ln % 2 or enc > 2:
+                raise ValueError("a rectangle outside the screen or its message")
+            if enc == 0 and ln != 2 * rw * rh:
+                raise ValueError("a raw rectangle of the wrong size")
             data = np.frombuffer(frame, dtype="<u2", count=ln // 2, offset=o)
             o += ln
             if enc == 0:
                 block = data.reshape(rh, rw)
             else:
                 runs, cols = data[0::2].astype(np.int64), data[1::2]
+                if runs.size != cols.size or int(runs.sum()) != rw * rh:
+                    raise ValueError("run lengths that do not cover the rectangle")
                 flat = np.repeat(cols, runs)
-                block = flat[: rw * rh].reshape(rh, rw) if enc == 1 else flat[: rw * rh].reshape(rw, rh).T
+                block = flat.reshape(rh, rw) if enc == 1 else flat.reshape(rw, rh).T
             self.px[y:y + rh, x:x + rw] = block
             rects.append((x, y, rw, rh))
         if rects:
@@ -170,7 +206,8 @@ def png_write(path, rgbx, level):
 class MirrorClient:
     """One connection to the board's mirror port. recv() returns whole messages; send*() the page's messages."""
 
-    def __init__(self, host, port=PORT, timeout=10):
+    def __init__(self, host, port=None, timeout=10):
+        port = PORT if port is None else port
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.sock.sendall(HELLO)
@@ -191,11 +228,20 @@ class MirrorClient:
         """The next message from the board, or None once it is over ('T', or the socket closed)."""
         try:
             n = struct.unpack("<I", self._recv_all(4))[0]
+            if n > MSG_CAP:
+                raise ConnectionError(f"a message of {n} bytes: not this protocol")
             msg = self._recv_all(n)
-        except (ConnectionError, socket.timeout, OSError):
+        except socket.timeout:
+            raise
+        except (ConnectionError, OSError) as e:
+            if not isinstance(e, ConnectionResetError):
+                print(f"{time.strftime('%H:%M:%S')} link: {e}", flush=True)
             return None
         if msg[:1] == b"B":
-            self.boards = json.loads(msg[1:])
+            boards = json.loads(msg[1:])            # ValueError on anything else: the caller reconnects
+            if not isinstance(boards, dict) or not isinstance(boards.get("board"), dict):
+                raise ValueError("the board message is not an object with a board")
+            self.boards = boards
         elif msg[:1] == b"T":
             self.taken = True
             return None
@@ -418,6 +464,19 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
     def fill(rect):
         AppKit.NSRectFillUsingOperation(nsrect(rect), AppKit.NSCompositingOperationSourceOver)
 
+    photo_cache = {}
+
+    def photo_image(prof):
+        """The profile's photo as an NSImage with the screen rectangle, or None: missing, unreadable, unmarked."""
+        spec = prof.get("photo")
+        if not spec or not spec.get("screen"):
+            return None
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), spec["file"])
+        if path not in photo_cache:
+            img = AppKit.NSImage.alloc().initWithContentsOfFile_(path) if os.path.exists(path) else None
+            photo_cache[path] = (img, tuple(spec["screen"])) if img and img.size().width > 0 else None
+        return photo_cache[path]
+
     def device_layout(prof, cw, ch, r_px, ppi, s, ox, oy):
         """The device at s points per millimetre with its body's top left at (ox, oy): the body, the glass, the
         active area (its corners from the board's r), and the keys as shapes (centre, rotation in degrees where 0
@@ -437,8 +496,26 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
             bh = (body["h"] or ch * mm + 2 * body["y"]) * s
             brect, body_r = (ox, oy, bw, bh), body["r"] * s
             ax, ay = ox + body["x"] * s, oy + body["y"] * s
+        photo = photo_image(prof)
+        if photo:
+            img, (px, py, pw, ph) = photo
+            bw_mm = body.get("w") or body["d"]
+            bh_mm = body.get("h") or body.get("d") or bw_mm * img.size().height / img.size().width
+            fx = bw_mm * s / img.size().width                   # photo pixels to points, each way: the drawing's
+            fy = bh_mm * s / img.size().height                  # millimetres win over the picture's proportions
+            brect = (ox, oy, img.size().width * fx, img.size().height * fy)
+            hole = (ox + px * fx, oy + py * fy, pw * fx, ph * fy)   # the picture's screen opening, the glass
+            # the board's pixels keep their proportions inside it, centred
+            ax, ay, aw, ah = hole
+            if ah / aw > ch / cw:
+                ah = aw * ch / cw
+                ay = hole[1] + (hole[3] - ah) / 2
+            else:
+                aw = ah * cw / ch
+                ax = hole[0] + (hole[2] - aw) / 2
+            s = aw / screen_mm if screen_mm else s              # the screen's own scale, from the photo
         g = glass["border"] * s
-        grect = (ax - g, ay - g, aw + 2 * g, ah + 2 * g)
+        grect = hole if photo else (ax - g, ay - g, aw + 2 * g, ah + 2 * g)
         round_ = r_px * 2 >= min(cw, ch)
         glass_r = (aw + 2 * g) / 2 if round_ else glass["r"] * s
         active_r = aw / 2 if round_ else r_px * mm * s
@@ -457,6 +534,10 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
             elif where == "bottom":
                 keys.append(dict(label=label, code=code, cx=brect[0] + pos * s,
                                  cy=brect[1] + brect[3] + T / 2 - 1, rot=90, w=T, h=L, dx=0, dy=1))
+            elif where == "face":                              # a round button on the front: pos is (x, y) mm
+                d = length * s
+                keys.append(dict(label=label, code=code, cx=brect[0] + pos[0] * s, cy=brect[1] + pos[1] * s,
+                                 rot=0, w=d, h=d, dx=0, dy=0, face=True))
             else:
                 keys.append(dict(label=label, code=code, cx=brect[0] + brect[2] + T / 2 - 1, cy=brect[1] + pos * s,
                                  rot=0, w=T, h=L, dx=1, dy=0))
@@ -472,13 +553,16 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
             *at, dia = body["studs"]
             studs = [(brect[0] + x * s, brect[1] + y * s, dia * s) for x, y in at]
         return dict(body=brect, body_r=body_r, glass=grect, glass_r=glass_r, active=(ax, ay, aw, ah),
-                    active_r=active_r, keys=keys, s=s, led=led, studs=studs,
+                    active_r=active_r, keys=keys, s=s, led=led, studs=studs, photo=photo[0] if photo else None,
                     right=max([k["w"] - 1 for k in keys if k["dx"] > 0] + [0]),
                     top=max([k["w"] - 1 for k in keys if k["dy"] < 0] + [0]),
                     bottom=max([k["w"] - 1 for k in keys if k["dy"] > 0] + [0]))
 
     def key_path(shape, pushed):
         """The key as a path; pushed in, it is half as thick and sits closer to the body."""
+        if shape.get("face"):
+            d = shape["w"] * (.85 if pushed else 1)
+            return oval((shape["cx"] - d / 2, shape["cy"] - d / 2, d, d))
         w = shape["w"] * (.5 if pushed else 1)
         t = AppKit.NSAffineTransform.transform()
         t.translateXBy_yBy_(shape["cx"] - (shape["w"] / 4 * shape["dx"] if pushed else 0),
@@ -490,6 +574,8 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
 
     def key_hit(shape, p):
         import math
+        if shape.get("face"):
+            return math.hypot(p.x - shape["cx"], p.y - shape["cy"]) <= shape["w"] / 2 + 2
         r = math.radians(shape["rot"])
         dx, dy = p.x - shape["cx"], p.y - shape["cy"]
         lx = math.cos(r) * dx + math.sin(r) * dy
@@ -525,32 +611,47 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
         shadow.setShadowColor_(rgb(0, 0, 0, .45))
         shadow.setShadowOffset_((0, -L["s"] * 1.2))
         shadow.setShadowBlurRadius_(L["s"] * 3)
-        AppKit.NSGraphicsContext.saveGraphicsState()
-        shadow.set()
-        rgb(*style["fill"]).set()
-        rounded(L["body"], L["body_r"]).fill()
-        AppKit.NSGraphicsContext.restoreGraphicsState()
-        # the keys sit behind the body's edge, so first
-        for shape in L["keys"]:
-            pushed = pressed == shape["label"]
-            c1, c2 = style["key_down"] if pushed else style["key"]
-            grad = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(rgb(*c1), rgb(*c2))
-            grad.drawInBezierPath_angle_(key_path(shape, pushed), shape["rot"] + 90)
-        grad = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(rgb(*style["fill"]), rgb(*style["fill2"]))
-        grad.drawInBezierPath_angle_(rounded(L["body"], L["body_r"]), -60)
-        edge = rounded(L["body"], L["body_r"])
-        edge.setLineWidth_(1)
-        rgb(*style["edge"]).set()
-        edge.stroke()
-        for sx, sy, sd in L["studs"]:                           # the corner holes: a dark ring, a lighter floor
+        if L["photo"] is not None:
+            # the photograph is the body, keys and all; a pressed key gets a touch of shade over it
+            AppKit.NSGraphicsContext.saveGraphicsState()
+            shadow.set()
+            L["photo"].drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
+                nsrect(L["body"]), AppKit.NSZeroRect, AppKit.NSCompositingOperationSourceOver, 1.0, True, None)
+            AppKit.NSGraphicsContext.restoreGraphicsState()
+            for shape in L["keys"]:
+                if pressed == shape["label"]:
+                    rgb(0, 0, 0, .35).set()
+                    key_path(shape, False).fill()
+            paint_led(L, led_mode, time.monotonic())
+            rgb(0x08, 0x08, 0x0a).set()                         # the opening is glass: black around the screen
+            rounded(L["glass"], L["glass_r"]).fill()
+        else:
+            AppKit.NSGraphicsContext.saveGraphicsState()
+            shadow.set()
+            rgb(*style["fill"]).set()
+            rounded(L["body"], L["body_r"]).fill()
+            AppKit.NSGraphicsContext.restoreGraphicsState()
+            # the keys sit behind the body's edge, so first
+            for shape in L["keys"]:
+                pushed = pressed == shape["label"]
+                c1, c2 = style["key_down"] if pushed else style["key"]
+                grad = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(rgb(*c1), rgb(*c2))
+                grad.drawInBezierPath_angle_(key_path(shape, pushed), shape["rot"] + 90)
+            grad = AppKit.NSGradient.alloc().initWithStartingColor_endingColor_(rgb(*style["fill"]), rgb(*style["fill2"]))
+            grad.drawInBezierPath_angle_(rounded(L["body"], L["body_r"]), -60)
+            edge = rounded(L["body"], L["body_r"])
+            edge.setLineWidth_(1)
             rgb(*style["edge"]).set()
-            oval((sx - sd / 2, sy - sd / 2, sd, sd)).fill()
-            rgb(*style["fill2"]).set()
-            oval((sx - sd / 2 + 1, sy - sd / 2 + 1, sd - 2, sd - 2)).fill()
-        paint_led(L, led_mode, time.monotonic())
-        # the cover glass, then the screen inside it
-        rgb(0x08, 0x08, 0x0a).set()
-        rounded(L["glass"], L["glass_r"]).fill()
+            edge.stroke()
+            for sx, sy, sd in L["studs"]:                       # the corner holes: a dark ring, a lighter floor
+                rgb(*style["edge"]).set()
+                oval((sx - sd / 2, sy - sd / 2, sd, sd)).fill()
+                rgb(*style["fill2"]).set()
+                oval((sx - sd / 2 + 1, sy - sd / 2 + 1, sd - 2, sd - 2)).fill()
+            paint_led(L, led_mode, time.monotonic())
+            # the cover glass, then the screen inside it
+            rgb(0x08, 0x08, 0x0a).set()
+            rounded(L["glass"], L["glass_r"]).fill()
         AppKit.NSGraphicsContext.saveGraphicsState()
         rounded(L["active"], L["active_r"]).addClip()
         rgb(0, 0, 0).set()
@@ -617,26 +718,34 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
             while True:
                 try:
                     msg = client.recv()
-                except socket.timeout:
-                    continue
+                except socket.timeout:               # the board beats every second: six missed is a dead link
+                    print(f"{time.strftime('%H:%M:%S')} nothing from the board for 6 s, reconnecting", flush=True)
+                    break
+                except ValueError as e:
+                    print(f"{time.strftime('%H:%M:%S')} bad message from the board ({e}), reconnecting", flush=True)
+                    break
                 if msg is None:
                     break
                 snap = player = None
-                with model.lock:
-                    model.bytes += len(msg)
-                    if msg[:1] == b"B":
-                        model.board = client.boards["board"]
-                    elif msg[:1] == b"F":
-                        rects = model.screen.apply(msg)
-                        model.frames += 1
-                        size = (model.screen.w, model.screen.h)
-                        snap = model.screen.rgbx() if model.rec and rects else None
-                    elif msg[:1] == b"A" and len(msg) > 2:
-                        model.audio_bytes += len(msg) - 2
-                        player = model.player if model.listen == msg[1] else None
-                    elif msg[:1] == b"L" and len(msg) == 2:
-                        model.led = msg[1]
-                        AppHelper.callAfter(view.led_changed)
+                try:
+                    with model.lock:
+                        model.bytes += len(msg)
+                        if msg[:1] == b"B":
+                            model.board = client.boards["board"]
+                        elif msg[:1] == b"F":
+                            rects = model.screen.apply(msg)
+                            model.frames += 1
+                            size = (model.screen.w, model.screen.h)
+                            snap = model.screen.rgbx() if model.rec and rects else None
+                        elif msg[:1] == b"A" and len(msg) > 2 and len(msg) % 2 == 0:
+                            model.audio_bytes += len(msg) - 2
+                            player = model.player if model.listen == msg[1] else None
+                        elif msg[:1] == b"L" and len(msg) == 2:
+                            model.led = msg[1]
+                            AppHelper.callAfter(view.led_changed)
+                except (ValueError, struct.error, IndexError, KeyError, TypeError) as e:
+                    print(f"{time.strftime('%H:%M:%S')} bad message from the board ({e}), reconnecting", flush=True)
+                    break
                 if player:
                     player.feed(msg[2:])
                 if snap is not None:
@@ -857,9 +966,9 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
             b = g["b"]
             L = device_layout(b["profile"], b["w"], b["h"], b["r"], b["ppi"], g["s"], g["m"], g["mt"])
             W, H = self.bounds().size
-            buttons = {"close": (W - 4 - BUTTON, 4, BUTTON, BUTTON), "shot": (W - 44 - BUTTON, 4, BUTTON, BUTTON),
-                       "rec": (W - 84 - BUTTON, 4, BUTTON, BUTTON), "listen": (W - 124 - BUTTON, 4, BUTTON, BUTTON),
-                       "talk": (W - 164 - BUTTON, 4, BUTTON, BUTTON)}
+            x0 = (W - (5 * (BUTTON + 6) - 6)) / 2                      # the five, centred over the device
+            buttons = {name: (x0 + i * (BUTTON + 6), 4, BUTTON, BUTTON)
+                       for i, name in enumerate(("talk", "listen", "rec", "shot", "close"))}
             grip = (W - GRIP - 5, H - GRIP - 5, GRIP, GRIP)
             move = (5, H - GRIP - 5, GRIP, GRIP)
             self.rects = dict(g=g, L=L, body=L["body"], glass=L["active"], radius=L["active_r"], keys=L["keys"],
@@ -950,8 +1059,8 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
                 ts.drawAtPoint_((box[0] + 8, box[1] + 4))
             elif self.toast:
                 self.toast = None
-            # the two handles at the bottom: move on the left, resize on the right; always there, the only way to
-            # drag the window (the body and the background do nothing, too easy to miss)
+            # the two handles at the bottom: move on the left, resize on the right; always there (the body drags
+            # the window too, the clear margin around it does nothing)
             gr = r["grip"]
             rgb(0x9a, 0x9a, 0xa0, .7).set()
             for i in (0, 5, 10):
@@ -1106,7 +1215,7 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
                     client.pointer(x, y, True)
             elif what == "grip":
                 self.grip_drag = (event.locationInWindow().x, self.K, self.bounds().size.width)
-            elif what == "move":
+            elif what in ("move", "body"):                    # the handle, or the body where it is wide enough
                 self.window().performWindowDragWithEvent_(event)
             elif what in ("close", "shot", "rec", "listen", "talk") or what in self.rects["key_codes"]:
                 self.pressed = (what, time.monotonic())
@@ -1462,6 +1571,7 @@ def run_window(host, scale, on_top, selftest=False, sound=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("host", help="the board's IP address or host name")
+    ap.add_argument("--port", type=int, default=PORT, help=f"the board's mirror port (default {PORT})")
     ap.add_argument("--scale", type=float, default=1.0, help="the size as a share of the real size (default 1)")
     ap.add_argument("--on-top", action="store_true", help="start floating above other windows (View menu toggles it)")
     ap.add_argument("--sound", action="store_true", help="start with View > Sound on: the board's clicks and cues play here")
@@ -1470,6 +1580,7 @@ def main():
     ap.add_argument("--png", help="with --stats: write the screen here once it has been still for half a second")
     ap.add_argument("--selftest", action="store_true", help="screenshot, a short recording and the zoom steps, then quit")
     a = ap.parse_args()
+    globals()["PORT"] = a.port
     if a.stats:
         stats(a.host, a.seconds, a.png)
         return

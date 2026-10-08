@@ -15,6 +15,9 @@ dependencies:
   idf: ">=5.1"
 files:
   exclude:
-    - "examples/**/build/**"
-    - "tools/.venv/**"
     - "docs/*.mp4"
+    - "POST.md"
+    - "notes/**/*"
+    - "**/.venv/**/*"
+    - "**/sdkconfig.old"
+    - "**/build-*/**/*"

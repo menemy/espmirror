@@ -1,0 +1,40 @@
+menu "espmirror example"
+
+    choice EXAMPLE_BOARD
+        prompt "The board"
+        default EXAMPLE_BOARD_NONE
+        help
+            A board the example knows drives its own panel as well as the mirror;
+            any other board shows the user interface on the mirror only.
+
+        config EXAMPLE_BOARD_NONE
+            bool "Any devkit: the mirror is the display"
+
+        config EXAMPLE_BOARD_AIPI_LITE
+            bool "XOrigin AIPI Lite (ESP32-S3, 128 x 128 ST7789)"
+    endchoice
+
+    config EXAMPLE_MIRROR_NAME
+        string "The board's name for the viewer"
+        default "AIPI Lite" if EXAMPLE_BOARD_AIPI_LITE
+        default "espmirror lvgl"
+        help
+            The viewer draws a device it knows ("Waveshare 2.16", "Waveshare 1.54G",
+            "Waveshare 1.75C", "AIPI Lite"); any other name gets a plain frame.
+
+    config EXAMPLE_MIRROR_WIDTH
+        int "Screen width, pixels"
+        default 128 if EXAMPLE_BOARD_AIPI_LITE
+        default 240
+
+    config EXAMPLE_MIRROR_HEIGHT
+        int "Screen height, pixels"
+        default 128 if EXAMPLE_BOARD_AIPI_LITE
+        default 240
+
+    config EXAMPLE_MIRROR_PPI
+        int "Pixels per inch (for the viewer's real-size mode)"
+        default 126 if EXAMPLE_BOARD_AIPI_LITE
+        default 200
+
+endmenu

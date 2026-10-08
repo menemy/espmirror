@@ -33,4 +33,4 @@ file compiled only when LVGL is in the build; an e-paper or a camera path is
 docs/protocol.md and must keep older viewers working, or bump the hello.
 
 Build both examples for `esp32s3` and `esp32` before a pull request; the
-workflow does the same on ESP-IDF 5.4 and 6.0.
+workflow does the same on ESP-IDF 5.1, 5.4 and 6.0.

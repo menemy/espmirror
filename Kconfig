@@ -2,10 +2,12 @@ menu "espmirror"
 
     config ESPMIRROR_PORT
         int "TCP port the viewer connects to"
+        range 1 65535
         default 7331
 
     config ESPMIRROR_FRAME_MS
         int "Shortest interval between two frames, ms"
+        range 10 1000
         default 40
         help
             The mirror task collects the changed rectangles and sends them at most
@@ -20,14 +22,19 @@ menu "espmirror"
             board hears and plays into a ring the viewer can listen to, and the
             viewer may send its own microphone back through the on_talk callbacks.
             Off, those calls compile to nothing.
+            The port has no authentication: with this on, anyone on the network who
+            can reach it hears the microphone and may talk into the speaker. Keep it
+            off in an image that leaves the bench.
 
     config ESPMIRROR_AUDIO_RING_KB
-        int "Audio ring, KB"
+        int "Audio ring, KB (a power of two)"
         depends on ESPMIRROR_AUDIO
+        range 8 256
         default 16
         help
             16 KB holds half a second of 16 kHz mono PCM16; the viewer catches up
-            from the newest quarter second when it falls behind.
+            from the newest half of the ring when it falls behind. 8, 16, 32, 64,
+            128 or 256: the build checks.
 
     config ESPMIRROR_MSG_KB
         int "Frame message buffer, KB"
@@ -40,14 +47,18 @@ menu "espmirror"
 
     config ESPMIRROR_TASK_STACK
         int "Mirror task stack, bytes"
+        range 3072 16384
         default 4096
 
     config ESPMIRROR_TASK_PRIORITY
         int "Mirror task priority"
+        range 1 24
         default 3
 
     config ESPMIRROR_TASK_CORE
         int "Mirror task core (-1 any)"
+        range -1 1 if !FREERTOS_UNICORE
+        range -1 0 if FREERTOS_UNICORE
         default -1
 
     config ESPMIRROR_PREFER_PSRAM

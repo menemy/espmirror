@@ -18,11 +18,12 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "protocol_examples_common.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "basic";
 
-#define W 240
-#define H 240
+#define W CONFIG_EXAMPLE_MIRROR_WIDTH
+#define H CONFIG_EXAMPLE_MIRROR_HEIGHT
 
 /* RGB565 from 8-bit channels, in the byte order the mirror expects (native). */
 static inline uint16_t rgb(uint8_t r, uint8_t g, uint8_t b) {
@@ -52,6 +53,7 @@ static void digit(uint16_t *fb, int x, int y, int d, int px, uint16_t c) {
 }
 
 static volatile int s_key_down[4];
+static volatile int s_touch_x = -1, s_touch_y = -1;
 
 static void on_key(int key, bool down, void *user) {
     (void)user;
@@ -59,19 +61,31 @@ static void on_key(int key, bool down, void *user) {
     if (key >= 1 && key <= 3) s_key_down[key] = down;
 }
 
+static void on_pointer(int x, int y, bool down, void *user) {
+    (void)user;
+    s_touch_x = down ? x : -1;
+    s_touch_y = down ? y : -1;
+}
+
 void app_main(void) {
-    ESP_ERROR_CHECK(nvs_flash_init());
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());         /* another image's NVS, or an old layout */
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(example_connect());   /* Wi-Fi from menuconfig */
 
     const espmirror_config_t cfg = {
-        .name = "espmirror basic",
+        .name = CONFIG_EXAMPLE_MIRROR_NAME,
         .width = W,
         .height = H,
-        .ppi = 200,
+        .ppi = CONFIG_EXAMPLE_MIRROR_PPI,
         .corner_radius = 0,
         .on_key = on_key,
+        .on_pointer = on_pointer,
     };
     ESP_ERROR_CHECK(espmirror_start(&cfg));
     ESP_LOGI(TAG, "run tools/mirror_window.py <this board's IP> on your computer");
@@ -83,24 +97,27 @@ void app_main(void) {
         if (fb) {
             /* The background, the square, the counter, the keys. */
             fill(fb, 0, 0, W, H, rgb(24, 26, 32));
-            fill(fb, 0, 0, W, 36, rgb(40, 120, 90));
+            fill(fb, 0, 0, W, H * 3 / 20, rgb(40, 120, 90));
             fill(fb, x, y, 40, 40, rgb(230, 90, 60));
             unsigned n = frame;
             for (int i = 0; i < 6; i++) {
-                digit(fb, 200 - i * 24, 190, n % 10, 5, rgb(240, 240, 240));
+                digit(fb, W - 40 - i * 24, H - 50, n % 10, 5, rgb(240, 240, 240));
                 n /= 10;
             }
+            if (s_touch_x >= 0) fill(fb, s_touch_x - 8, s_touch_y - 8, 16, 16, rgb(250, 220, 80));
             for (int k = 1; k <= 3; k++) {
-                fill(fb, 20 + (k - 1) * 70, 110, 50, 50, s_key_down[k] ? rgb(80, 200, 120) : rgb(60, 64, 76));
+                int side = W * 5 / 24;
+                fill(fb, W / 12 + (k - 1) * W * 7 / 24, H * 11 / 24, side, side,
+                     s_key_down[k] ? rgb(80, 200, 120) : rgb(60, 64, 76));
             }
             espmirror_frame_end(0, 0, W, H);
         }
         x += dx;
         y += dy;
         if (x < 0 || x + 40 > W) dx = -dx;
-        if (y < 36 || y + 40 > 110) dy = -dy;
+        if (y < H * 3 / 20 || y + 40 > H * 11 / 24) dy = -dy;
         frame++;
         espmirror_set_led(frame / 25 % 2 ? ESPMIRROR_LED_ON : ESPMIRROR_LED_OFF);
-        vTaskDelay(pdMS_TO_TICKS(40));
+        vTaskDelay(pdMS_TO_TICKS(40) ? pdMS_TO_TICKS(40) : 1);
     }
 }

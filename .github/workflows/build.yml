@@ -11,11 +11,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        idf: ["v5.4", "v6.0"]
+        idf: ["v5.1", "v5.4", "v6.0"]
         example: [basic, lvgl]
         target: [esp32s3, esp32]
+        exclude:
+          # The registry's LVGL manifest needs component manager 2 (ESP-IDF 5.4+).
+          - idf: "v5.1"
+            example: lvgl
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
         uses: espressif/esp-idf-ci-action@v1
         with:
@@ -26,8 +30,8 @@ jobs:
   viewer:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: python -m py_compile tools/mirror_window.py
+      - run: python -m py_compile tools/mirror_window.py tools/fake_board.py

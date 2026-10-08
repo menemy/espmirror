@@ -30,8 +30,8 @@ static const char *TAG = "espmirror";
  * y, w, h, coding, 0, length, pixels), 'B' then JSON naming the board, 'T'
  * when another viewer takes the screen, 'A' then the source (1 the
  * microphone, 2 the speaker) and PCM16 mono 16 kHz while the viewer listens,
- * 'L' then the LED's state. From the viewer: 1/0 and x, y (a pointer, for
- * touch screens; passed on as nothing here), 3 and a key (a tap), 6, a key
+ * 'L' then the LED's state. From the viewer: 1/0 and x, y (a pointer:
+ * on_pointer), 3 and a key (a tap), 6, a key
  * and 1/0 (held down or let go), 7 and the source to listen to or 0, 8 and
  * 1/0 (talk through the speaker, or stop), 'S', a format byte and PCM16 mono
  * 16 kHz (the viewer's microphone), anything else keeps the connection. */
@@ -53,10 +53,15 @@ static const char *TAG = "espmirror";
 #define AUD_RING    (CONFIG_ESPMIRROR_AUDIO_RING_KB * 1024)
 #define AUD_CHUNK   1280       /* bytes per 'A' message: 40 ms, as the frames */
 #define AUD_BURST   4          /* at most this many 'A' messages between two frames, catching up */
+_Static_assert((AUD_RING & (AUD_RING - 1)) == 0 && AUD_RING >= 4 * AUD_CHUNK,
+               "CONFIG_ESPMIRROR_AUDIO_RING_KB: a power of two, 8 or more");
 #endif
+_Static_assert(MSG_MAX >= 8 * 1024, "CONFIG_ESPMIRROR_MSG_KB: 8 or more");
 
 static espmirror_config_t s_cfg;
+static char s_name[48];        /* the board's name, JSON-safe */
 static int s_w, s_h;
+static volatile bool s_ready;  /* the task runs once everything is published */
 
 static uint16_t *s_fb;         /* the screen copy, under s_lock */
 static uint8_t *s_msg;
@@ -67,6 +72,7 @@ static volatile uint8_t s_state;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static struct { int x1, y1, x2, y2; } s_dirty[MAX_DIRTY];
 static int s_ndirty;
+static struct { int x1, y1, x2, y2; bool on; } s_tail;   /* what did not fit the last message: first next time */
 
 /* The TCP side, all on the mirror task: the viewer's connection with the
  * message being received, and one candidate still saying hello (the viewer
@@ -146,23 +152,34 @@ uint16_t *espmirror_frame_begin(void) {
 
 /* The mirror task picks the change up on its next pass (its wait is on the
  * socket, not on a notification). */
+/* The rectangle clipped to the screen, as x1, y1, x2, y2; false when nothing is left. */
+static bool clip(int x, int y, int width, int height, int *x1, int *y1, int *x2, int *y2) {
+    if (width <= 0 || height <= 0 || x >= s_w || y >= s_h) return false;
+    int64_t xe = (int64_t)x + width - 1, ye = (int64_t)y + height - 1;
+    *x1 = x < 0 ? 0 : x;
+    *y1 = y < 0 ? 0 : y;
+    *x2 = xe >= s_w ? s_w - 1 : (int)xe;
+    *y2 = ye >= s_h ? s_h - 1 : (int)ye;
+    return *x2 >= *x1 && *y2 >= *y1;
+}
+
 void espmirror_frame_end(int x, int y, int width, int height) {
     if (!__atomic_load_n(&s_fb, __ATOMIC_ACQUIRE)) return;
     xSemaphoreGive(s_lock);
-    if (width > 0 && height > 0) dirty_add(x, y, x + width - 1, y + height - 1);
+    int x1, y1, x2, y2;
+    if (clip(x, y, width, height, &x1, &y1, &x2, &y2)) dirty_add(x1, y1, x2, y2);
 }
 
 void espmirror_draw(int x, int y, int width, int height, const uint16_t *rgb565, int stride) {
-    if (!rgb565 || width <= 0 || height <= 0) return;
+    int x1, y1, x2, y2;
+    if (!rgb565 || !s_w || !clip(x, y, width, height, &x1, &y1, &x2, &y2)) return;
     if (stride <= 0) stride = width;
     uint16_t *fb = espmirror_frame_begin();
     if (!fb) return;
-    int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
-    int x1 = x + width - 1 < s_w ? x + width - 1 : s_w - 1, y1 = y + height - 1 < s_h ? y + height - 1 : s_h - 1;
-    for (int r = y0; r <= y1 && x1 >= x0; r++) {
-        memcpy(fb + r * s_w + x0, rgb565 + (r - y) * stride + (x0 - x), (x1 - x0 + 1) * 2);
+    for (int r = y1; r <= y2; r++) {
+        memcpy(fb + r * s_w + x1, rgb565 + (size_t)(r - y) * stride + (x1 - x), (x2 - x1 + 1) * 2);
     }
-    espmirror_frame_end(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+    espmirror_frame_end(x1, y1, x2 - x1 + 1, y2 - y1 + 1);
 }
 
 void espmirror_size(int *width, int *height) {
@@ -171,21 +188,21 @@ void espmirror_size(int *width, int *height) {
 }
 
 void espmirror_set_screen_state(uint8_t state) {
-    s_state = state > 2 ? 2 : state;
-    dirty_add(0, 0, 0, 0);                /* a frame goes out with it; an empty rectangle codes to nothing much */
+    __atomic_store_n(&s_state, state > 2 ? 2 : state, __ATOMIC_RELAXED);
+    if (s_w) dirty_add(0, 0, 0, 0);       /* a frame goes out with it; one pixel's worth of rectangle */
 }
 
 void espmirror_set_led(uint8_t mode) {
-    s_led_mode = mode > 3 ? 3 : mode;      /* the mirror task sends it on its next pass */
+    __atomic_store_n(&s_led_mode, mode > 3 ? 3 : mode, __ATOMIC_RELAXED);   /* sent on the task's next pass */
 }
 
 bool espmirror_connected(void) {
-    return s_cfd >= 0;
+    return __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0;
 }
 
 /* Mirror task: the LED's state to the viewer when it changed since it was last told. */
 static void led_pump(void) {
-    uint8_t mode = s_led_mode;
+    uint8_t mode = __atomic_load_n(&s_led_mode, __ATOMIC_RELAXED);
     if (s_cfd < 0 || mode == s_led_sent) return;
     uint8_t msg[2] = {'L', mode};
     if (tcp_send(s_cfd, msg, 2, NULL, 0, SEND_MS)) {
@@ -202,7 +219,7 @@ static void led_pump(void) {
  * source the viewer asked for. */
 static void audio_put(uint8_t src, const int16_t *pcm, size_t samples) {
     size_t n = samples * 2;
-    if (s_aud_src != src || !s_aud || n > AUD_RING) return;
+    if (__atomic_load_n(&s_aud_src, __ATOMIC_RELAXED) != src || !s_aud || n > AUD_RING) return;
     portENTER_CRITICAL(&s_aud_mux);
     if (s_aud_src == src) {
         uint32_t w = s_aud_w;
@@ -215,11 +232,13 @@ static void audio_put(uint8_t src, const int16_t *pcm, size_t samples) {
 }
 
 void espmirror_audio_capture(const int16_t *mono, size_t samples) {
-    audio_put(1, mono, samples);
+    for (size_t at = 0; at < samples; at += 320) {              /* 20 ms at a time under the lock */
+        audio_put(1, mono + at, samples - at < 320 ? samples - at : 320);
+    }
 }
 
 void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
-    if (s_aud_src != 2 || !s_aud) return;
+    if (__atomic_load_n(&s_aud_src, __ATOMIC_RELAXED) != 2 || !s_aud) return;
     if (channels <= 1) {
         audio_put(2, pcm, frames);
         return;
@@ -234,12 +253,13 @@ void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
 
 /* Mirror task: the viewer listens to a source, or stops. */
 static void audio_set(uint8_t src) {
-    if (src > 2 || src == s_aud_src) return;
+    if (src > 2 || src == __atomic_load_n(&s_aud_src, __ATOMIC_RELAXED)) return;
     portENTER_CRITICAL(&s_aud_mux);
     s_aud_r = s_aud_w;
-    s_aud_src = src;
+    __atomic_store_n(&s_aud_src, src, __ATOMIC_RELAXED);
     portEXIT_CRITICAL(&s_aud_mux);
     ESP_LOGI(TAG, "viewer %s", src == 1 ? "listens to the microphone" : src == 2 ? "listens to the speaker" : "stopped listening");
+    if (s_cfg.on_listen) s_cfg.on_listen(src, s_cfg.user);
 }
 
 /* Mirror task: the viewer talks through the speaker, or stops; the firmware may refuse. */
@@ -262,7 +282,8 @@ static void talk_set(bool on) {
  * time; a reader further than the ring behind skips to the newest half of it.
  * The chunk is taken under the ring's lock, sent after it. */
 static void audio_pump(void) {
-    if (!s_aud_src || s_cfd < 0) return;
+    uint8_t src = __atomic_load_n(&s_aud_src, __ATOMIC_RELAXED);
+    if (!src || s_cfd < 0) return;
     for (int i = 0; i < AUD_BURST; i++) {
         portENTER_CRITICAL(&s_aud_mux);
         uint32_t w = s_aud_w, r = s_aud_r;
@@ -281,7 +302,7 @@ static void audio_pump(void) {
         portEXIT_CRITICAL(&s_aud_mux);
         if (!have) return;
         s_aud_out[0] = 'A';
-        s_aud_out[1] = s_aud_src;
+        s_aud_out[1] = src;
         if (!tcp_send(s_cfd, s_aud_out, 2 + AUD_CHUNK, NULL, 0, SEND_MS)) {
             ESP_LOGW(TAG, "viewer too slow or gone, closing");
             tcp_drop();
@@ -388,16 +409,22 @@ static size_t build_msg(void) {
     portEXIT_CRITICAL(&s_mux);
 
     s_msg[0] = 'F';
-    s_msg[1] = s_state;
+    s_msg[1] = __atomic_load_n(&s_state, __ATOMIC_RELAXED);
     put16(s_msg + 4, s_w);
     put16(s_msg + 6, s_h);
     size_t len = 8;
     int rects = 0;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < nt; i++) {
-        int x1 = todo[i].x1, y1 = todo[i].y1, x2 = todo[i].x2 < s_w ? todo[i].x2 : s_w - 1;
-        int y2 = todo[i].y2 < s_h ? todo[i].y2 : s_h - 1;
-        if (x1 > x2 || y1 > y2) continue;
+    /* The tail of the last message first (so a screen that changes all the time still gets through to its
+     * bottom), then the dirty list; a tail that does not fit stays for the next message. */
+    bool tail_first = s_tail.on;
+    s_tail.on = false;
+    for (int i = tail_first ? -1 : 0; i < nt; i++) {
+        int x1 = i < 0 ? s_tail.x1 : todo[i].x1, y1 = i < 0 ? s_tail.y1 : todo[i].y1;
+        int x2 = i < 0 ? s_tail.x2 : todo[i].x2, y2 = i < 0 ? s_tail.y2 : todo[i].y2;
+        if (x2 >= s_w) x2 = s_w - 1;
+        if (y2 >= s_h) y2 = s_h - 1;
+        if (x1 < 0 || y1 < 0 || x1 > x2 || y1 > y2) continue;
         int w = x2 - x1 + 1, h_all = y2 - y1 + 1;
         size_t n = 0;
         if ((size_t)w * h_all <= WHOLE_PX) n = code_rect(s_msg + len, MSG_MAX - len, x1, y1, w, h_all, true);
@@ -412,7 +439,15 @@ static size_t build_msg(void) {
             int h = y2 - y + 1 < band ? y2 - y + 1 : band;
             n = code_rect(s_msg + len, MSG_MAX - len, x1, y, w, h, false);
             if (!n) {
-                dirty_add(x1, y, x2, y2);
+                if (s_tail.on) {
+                    dirty_add(x1, y, x2, y2);       /* a second tail waits its turn behind the first */
+                } else {
+                    s_tail.x1 = x1;
+                    s_tail.y1 = y;
+                    s_tail.x2 = x2;
+                    s_tail.y2 = y2;
+                    s_tail.on = true;
+                }
                 break;
             }
             len += n;
@@ -455,7 +490,7 @@ static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb,
 static bool send_board(int fd) {
     char j[200];
     int n = snprintf(j, sizeof(j), "B{\"forms\":[],\"board\":{\"name\":\"%s\",\"w\":%d,\"h\":%d,\"ppi\":%d,\"r\":%d}}",
-                     s_cfg.name ? s_cfg.name : "", s_w, s_h, s_cfg.ppi, s_cfg.corner_radius);
+                     s_name, s_w, s_h, s_cfg.ppi, s_cfg.corner_radius);
     return n > 0 && n < (int)sizeof(j) && tcp_send(fd, j, n, NULL, 0, SEND_MS);
 }
 
@@ -497,22 +532,27 @@ static void input(const uint8_t *buf, size_t len) {
         return;
     }
     if (len > 2 && buf[0] == 'S') {
-        if (s_talk && s_cfg.on_talk_audio && (len - 2) % 2 == 0) {
-            s_cfg.on_talk_audio((const int16_t *)(buf + 2), (len - 2) / 2, s_cfg.user);
+        if (s_talk && s_cfg.on_talk_audio && buf[1] == 1 && (len - 2) % 2 == 0) {
+            int16_t pcm[(IN_MAX - 2) / 2];               /* aligned: the message buffer's offset is odd */
+            memcpy(pcm, buf + 2, len - 2);
+            s_cfg.on_talk_audio(pcm, (len - 2) / 2, s_cfg.user);
         }
         return;
     }
 #endif
-    if (len == 2 && buf[0] == 3) {
+    if (len == 2 && buf[0] == 3 && buf[1] >= 1 && buf[1] <= 6) {
         /* A tap, or the long press (4 PWR, 5 KEY3, 6 BOOT) as a plain press here. */
         int code = buf[1] <= 3 ? buf[1] : buf[1] == 4 ? 3 : buf[1] == 5 ? 1 : 2;
         tap_end();
         bool was = (s_held & 1u << code) != 0;
         s_tap_key = code;
         s_tap_until = esp_timer_get_time() + TAP_MS * 1000LL;
-        if (s_cfg.on_key && !was && code >= 1 && code <= 3) s_cfg.on_key(code, true, s_cfg.user);
-    } else if (len == 3 && buf[0] == 6) {
+        if (s_cfg.on_key && !was) s_cfg.on_key(code, true, s_cfg.user);
+    } else if (len == 3 && buf[0] == 6 && buf[1] >= 1 && buf[1] <= 3) {
         key_set(buf[1], buf[2] != 0);
+    } else if (len == 5 && buf[0] <= 1 && s_cfg.on_pointer) {
+        int x = buf[1] | buf[2] << 8, y = buf[3] | buf[4] << 8;
+        if (x < s_w && y < s_h) s_cfg.on_pointer(x, y, buf[0] == 1, s_cfg.user);
     }
 }
 
@@ -520,14 +560,16 @@ static void input(const uint8_t *buf, size_t len) {
 static void tcp_drop(void) {
     if (s_cfd < 0) return;
     keys_release();
+    if (s_cfg.on_pointer) s_cfg.on_pointer(0, 0, false, s_cfg.user);
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
     talk_set(false);
 #endif
     close(s_cfd);
-    s_cfd = -1;
+    __atomic_store_n(&s_cfd, -1, __ATOMIC_RELAXED);
     s_inn = 0;
     ESP_LOGI(TAG, "viewer left");
+    if (s_cfg.on_viewer) s_cfg.on_viewer(false, s_cfg.user);
 }
 
 static void tcp_unpend(void) {
@@ -579,7 +621,7 @@ static void tcp_admit(int fd) {
         tcp_send(s_cfd, "T", 1, NULL, 0, 500);
         tcp_drop();                        /* its keys and audio end with it */
     }
-    s_cfd = fd;
+    __atomic_store_n(&s_cfd, fd, __ATOMIC_RELAXED);
     s_inn = 0;
     if (!send_board(fd)) {
         tcp_drop();
@@ -588,6 +630,7 @@ static void tcp_admit(int fd) {
     s_led_sent = 0xFF;                     /* the new viewer gets the LED's state at once */
     dirty_add(0, 0, s_w - 1, s_h - 1);     /* the whole screen first */
     ESP_LOGI(TAG, "viewer connected");
+    if (s_cfg.on_viewer) s_cfg.on_viewer(true, s_cfg.user);
 }
 
 static void tcp_hello(void) {
@@ -653,7 +696,7 @@ static void tcp_wait(int ms) {
     struct timeval tv = {.tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000};
     bool idle = s_cfd < 0 && s_pfd < 0 && !s_tap_until;
     if (select(mx + 1, &rf, NULL, NULL, idle ? NULL : &tv) < 0) {
-        vTaskDelay(pdMS_TO_TICKS(ms));
+        vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1);
         return;
     }
     int64_t now = esp_timer_get_time();
@@ -666,6 +709,7 @@ static void tcp_wait(int ms) {
 static void mirror_task(void *arg) {
     (void)arg;
     int64_t last_beat = 0, last_frame = 0;
+    while (!__atomic_load_n(&s_ready, __ATOMIC_ACQUIRE)) vTaskDelay(1);
     for (;;) {
         tcp_wait(FRAME_MS);
         led_pump();
@@ -677,6 +721,7 @@ static void mirror_task(void *arg) {
         portENTER_CRITICAL(&s_mux);
         bool dirty = s_ndirty > 0;
         portEXIT_CRITICAL(&s_mux);
+        dirty = dirty || s_tail.on;                 /* the tail is the mirror task's own */
         if (now - last_frame < FRAME_MS || (!dirty && now - last_beat < BEAT_MS)) continue;
         last_beat = last_frame = now;
         size_t len = build_msg();
@@ -693,8 +738,24 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     if (!config || config->width <= 0 || config->height <= 0 || config->width > 4096 || config->height > 4096) {
         return ESP_ERR_INVALID_ARG;
     }
+    if ((size_t)config->width * 2 + RECT_HDR + 8 > MSG_MAX) {
+        ESP_LOGE(TAG, "a raw row of %d pixels does not fit a %d KB message", config->width, CONFIG_ESPMIRROR_MSG_KB);
+        return ESP_ERR_INVALID_ARG;
+    }
     if (s_task) return ESP_ERR_INVALID_STATE;
     s_cfg = *config;
+    /* The name as JSON needs it: a bounded copy, quotes and backslashes escaped, control characters out. */
+    size_t at = 0;
+    for (const char *p = config->name ? config->name : ""; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20) continue;
+        size_t need = c == '"' || c == '\\' ? 2 : c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;   /* whole characters */
+        if (at + need >= sizeof(s_name)) break;
+        if (need == 2 && c < 0x80) s_name[at++] = '\\';
+        s_name[at++] = (char)c;
+        for (size_t k = 1; k < need && c >= 0x80 && p[1]; k++) s_name[at++] = *++p;
+    }
+    s_name[at] = 0;
     s_w = config->width;
     s_h = config->height;
     SemaphoreHandle_t lock = xSemaphoreCreateMutex();
@@ -763,6 +824,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         return err;
     }
     __atomic_store_n(&s_fb, fb, __ATOMIC_RELEASE);   /* the drawing side may call in from now on */
-    ESP_LOGI(TAG, "%s, %d x %d, port %d", s_cfg.name ? s_cfg.name : "screen", s_w, s_h, PORT);
+    __atomic_store_n(&s_ready, true, __ATOMIC_RELEASE);   /* and the task may serve */
+    ESP_LOGI(TAG, "%s, %d x %d, port %d", s_name, s_w, s_h, PORT);
     return ESP_OK;
 }

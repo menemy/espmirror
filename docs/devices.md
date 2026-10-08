@@ -14,6 +14,8 @@ Built in:
 | `1.54G` | Waveshare ESP32-S3 e-Paper 1.54G | white, 39.8 × 53 mm, green LED | BOOT and PWR on the right edge, held keys |
 | `1.75C` | Waveshare ESP32-S3-Touch-AMOLED-1.75C | round, silver, 55 mm | KEY and BOOT on the rim |
 | `AIPI` | XOrigin AIPI Lite | red slab, 55.5 × 47.5 mm, corner studs | Power and Talk on the bottom edge, held keys |
+| `3.49` | Waveshare ESP32-S3-Touch-LCD-3.49 (case B) | blue bar, 98.5 × 34.8 mm, the 640 × 172 panel sideways | brightness and power, on the back of the case (drawn on the bottom edge) |
+| `3.5` | Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | black case, 95.11 × 63.67 mm | PWR and BOOT on the bottom edge (RST between them is not a key) |
 
 ## Adding one
 
@@ -42,6 +44,26 @@ A round body: `body=dict(shape="round", d=55.0, finish="silver")`, keys with
 The screen's pixel size and corner radius come from the board (`width`,
 `height`, `corner_radius` in `espmirror_config_t`); `ppi` lets View > Actual
 size show the device at its real size.
+
+## Looking at a profile without the board
+
+`tools/fake_board.py "Waveshare 1.54G" 200 200` serves the protocol on
+127.0.0.1 with a test pattern; `tools/mirror_window.py 127.0.0.1` then
+shows the profile the name picks, and the fake board prints what the viewer
+sends (keys, pointer, listen).
+
+## A photograph instead of a drawing
+
+Add `photo=dict(file="devices/<name>.png", screen=(x, y, w, h))` to the
+profile: a front-on photograph of the device with the background cut out,
+and the screen's active area in the photo's pixels. The six built-in profiles carry mock-ups an image model made from
+photographs of the devices (straight on, screen off, background removed),
+stretched to the drawings' millimetres; a photograph of the real thing is
+welcome in their place. The viewer draws the
+photograph as the body, scaled so its width is `body.w` millimetres, puts
+the live screen into the rectangle, and keeps the keys and the LED where the
+millimetres say (a pressed key is shaded over the photo). How to shoot one:
+`tools/devices/README.md`.
 
 ## Finishes
 

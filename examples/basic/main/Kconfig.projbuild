@@ -1,0 +1,22 @@
+menu "espmirror example"
+
+    config EXAMPLE_MIRROR_NAME
+        string "The board's name for the viewer"
+        default "espmirror basic"
+        help
+            The viewer draws a device it knows ("Waveshare 2.16", "Waveshare 1.54G",
+            "Waveshare 1.75C", "AIPI Lite"); any other name gets a plain frame.
+
+    config EXAMPLE_MIRROR_WIDTH
+        int "Screen width, pixels"
+        default 240
+
+    config EXAMPLE_MIRROR_HEIGHT
+        int "Screen height, pixels"
+        default 240
+
+    config EXAMPLE_MIRROR_PPI
+        int "Pixels per inch (for the viewer's real-size mode)"
+        default 200
+
+endmenu

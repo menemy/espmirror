@@ -7,10 +7,14 @@ An ESP-IDF component on the board, one Python window on the computer, plain
 TCP between them.
 
 <p align="center">
-  <img src="docs/images/waveshare-2.16.png" height="300" alt="A Waveshare 2.16 AMOLED board mirrored on a Mac, with its three top buttons">
-  &nbsp;&nbsp;&nbsp;
-  <img src="docs/images/waveshare-1.54g.png" height="300" alt="A Waveshare 1.54 inch e-paper board mirrored on a Mac, with its two side buttons and LED">
+  <img src="docs/demo.gif" width="440" alt="The LVGL example on a Waveshare 1.54G devkit, mirrored on a Mac and drawn as the device: the keys light LEDs on screen, the on-screen buttons play sounds, the spectrogram scrolls, the board's LED on the body lights while a sound plays">
 </p>
+
+That is `examples/lvgl` on an XOrigin AIPI Lite. The viewer's keyboard
+presses the device's keys, the mouse presses the buttons on screen, the
+sounds the board synthesises play on the Mac (and on the board's speaker),
+the board's microphone goes to the spectrogram and to the Mac, and the LED
+on the drawn body follows the board's.
 
 Why: a board on the desk is small, far from the screen you are reading logs
 on, and impossible to show to someone on a call. With the mirror the device
@@ -20,10 +24,12 @@ goes into the bug report.
 ## What it does
 
 - **Frames** of changed rectangles, run-length coded, 25 a second at most;
-  an idle board sends one empty frame a second. A 240 × 240 user interface
-  costs about 20 KB/s while it animates and nothing while it does not.
-- **Keys**: the viewer's drawn buttons and the keyboard press the board's
-  buttons, tapped or held. The firmware gets a callback.
+  an idle board sends one empty 8-byte frame a second. A 240 × 240 user
+  interface costs about 20 KB/s while it animates and next to nothing while
+  it does not.
+- **Keys and touch**: the viewer's drawn buttons and the keyboard press the
+  board's buttons, tapped or held; the mouse on the glass is a touch. The
+  firmware gets a callback for each.
 - **LED**: the board reports it, the viewer lights it on the body.
 - **Audio**: the viewer hears the board's speaker (clicks, cues, replies) or
   its microphone, and can talk into the board's speaker. Off at build time
@@ -33,15 +39,18 @@ goes into the bug report.
   record to mp4, screenshot to png, float on top, Dock icon with the live
   screen.
 - **Device profiles**: the viewer knows the Waveshare 2.16 and 1.75C AMOLED
-  boards, the Waveshare 1.54G e-paper and the XOrigin AIPI Lite. Another
-  device is a line of millimetres (docs/devices.md).
+  boards, the 1.54G e-paper, the 3.49 bar LCD, the P4 3.5 LCD and the
+  XOrigin AIPI Lite, each drawn
+  from an image of the device (mock-ups made from the makers' product
+  photographs today; a photograph of yours drops in). Another device is a line of
+  millimetres and a picture (docs/devices.md).
 
 ## Minimum requirements
 
 | | |
 |---|---|
 | Chip | any ESP32 with Wi-Fi (ESP32, S2, S3, C3, C6, P4 with a Wi-Fi coprocessor) |
-| ESP-IDF | 5.1 or later; LVGL hook for LVGL 9 |
+| ESP-IDF | 5.1 or later; the LVGL hook needs LVGL 9.5 or later (from the registry: ESP-IDF 5.4 or later, whose component manager reads LVGL's manifest) |
 | RAM | the screen copy `width × height × 2` bytes, the message buffer (32 KB by default, 8 KB at least), 1 KB input, 16 KB for audio when on, 4 KB of task stack |
 | PSRAM | not required; used when present (`CONFIG_ESPMIRROR_PREFER_PSRAM`) |
 | Computer | macOS with Python 3.11+ (the viewer is AppKit); `ffmpeg` for recordings |
@@ -120,21 +129,28 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 .venv/bin/python tools/mirror_window.py 192.168.1.42
 ```
 
-Drag by the handle at the bottom left, resize by the one at the bottom
-right. The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
+Drag by the body or the handle at the bottom left, resize by the one at
+the bottom right. The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
 Mic (Cmd Shift L), Talk (Cmd K), Bigger, Smaller, Actual size (Cmd 0),
 Float on Top (Cmd T). The keys 1, 2, 3 press the device's buttons.
 
 `--sound` starts with the board's sound on, `--on-top` floating,
-`--stats` prints frame statistics with no window, `--png out.png` saves the
-screen once it is still.
+`--stats` prints frame statistics with no window for `--seconds N` (5 by
+default); with it, `--png out.png` saves the screen once it is still.
+`--scale K` starts the window at K times the real size.
 
 ## Examples
 
-- `examples/basic`: no display at all; the board draws a clock, a bouncing
-  square and the keys you press into the mirror. Any devkit.
-- `examples/lvgl`: LVGL 9 with no panel behind it; the mirror is the
-  display. The viewer's keys move a slider.
+- `examples/basic`: no display at all; the board draws a counter, a bouncing
+  square, the keys you press and where you touch into the mirror. Any devkit.
+- `examples/lvgl`: the showcase. Animations, on-screen buttons the viewer's
+  mouse presses, LEDs for the keys, three small sounds synthesised on the
+  board, a spectrogram, the board's LED. On a board the example knows
+  (`menuconfig` → espmirror example → The board) it drives the board's own
+  panel, speaker, microphone and buttons too: the XOrigin AIPI Lite today
+  (ST7789, ES8311, two buttons). On any other devkit the mirror is the only
+  display and the sounds play on the viewer; the board file is one C file to
+  add for yours.
 
 ```sh
 cd examples/basic
@@ -142,6 +158,10 @@ idf.py set-target esp32s3
 idf.py menuconfig          # Example Connection Configuration: your Wi-Fi
 idf.py flash monitor       # then run the viewer with the IP it prints
 ```
+
+`menuconfig` also picks the board, and the name the board gives the viewer
+and the screen size for a devkit; name it after a device the viewer knows and
+it is drawn as that device.
 
 ## Your device
 
@@ -156,14 +176,15 @@ with the drawing and somebody with the board will add it.
 The board keeps a copy of the screen (RGB565) and a list of dirty
 rectangles. Every 40 ms the mirror task codes the dirty rectangles in the
 shortest of raw, row runs and column runs, and sends one message. The viewer
-applies them to its own copy and repaints the glass. Nothing is sent while
-nothing changes. One viewer at a time; a new one takes over, the old one is
-told.
+applies them to its own copy and repaints the glass. While nothing changes,
+one empty frame a second. One viewer at a time; a new one takes over, the
+old one is told.
 
 The LVGL hook listens to `LV_EVENT_FLUSH_START` and copies the flushed area
 out of the active draw buffer before the display driver swaps bytes for the
-panel, so it works with any driver, partial or full render mode, native or
-byte-swapped RGB565, and never touches the buffer.
+panel, so it works with any driver that renders RGB565, in partial, direct
+or full render mode, native or byte-swapped, and never touches the buffer
+(a display offset set with `lv_display_set_offset` is not taken out).
 
 The wire is in [docs/protocol.md](docs/protocol.md). Device profiles in
 [docs/devices.md](docs/devices.md).
@@ -181,5 +202,6 @@ The wire is in [docs/protocol.md](docs/protocol.md). Device profiles in
 
 ## License
 
-Apache-2.0. The device drawings in the viewer follow the makers' published
-dimensions; the device names are theirs.
+Apache-2.0. The device images in the viewer are mock-ups derived from the
+makers' product photographs and published dimensions; the device names and
+designs are theirs.

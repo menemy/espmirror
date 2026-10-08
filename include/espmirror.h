@@ -49,6 +49,20 @@ typedef struct {
      * it short, or hand the event to your input path. NULL ignores the keys. */
     void (*on_key)(int key, bool down, void *user);
 
+    /* The viewer's mouse on the glass, as a touch: down at x, y (screen
+     * pixels), moved while down, or up. Up once more, at 0, 0, when the
+     * viewer leaves. From the mirror task. NULL ignores it. */
+    void (*on_pointer)(int x, int y, bool down, void *user);
+
+    /* A viewer connected (true) or left (false): hold the radio awake, light
+     * something, count. From the mirror task. NULL ignores it. */
+    void (*on_viewer)(bool connected, void *user);
+
+    /* The viewer listens to the microphone (1), the speaker (2) or stops
+     * (0): a firmware that powers its microphone only when wanted does it
+     * here. From the mirror task. NULL ignores it. CONFIG_ESPMIRROR_AUDIO. */
+    void (*on_listen)(int source, void *user);
+
     /* The viewer wants to talk through the board's speaker (on), or stops;
      * then its microphone arrives as mono PCM16 at 16 kHz. Both from the
      * mirror task. NULL refuses. Only with CONFIG_ESPMIRROR_AUDIO. */
@@ -60,7 +74,8 @@ typedef struct {
 
 /* Starts the mirror task and listens on CONFIG_ESPMIRROR_PORT. After the
  * network is up (the viewer needs an IP to connect to, the socket does not).
- * Keeps a copy of the screen, width x height RGB565. */
+ * Keeps a copy of the screen, width x height RGB565; copies the config (the
+ * name too, 47 characters at most). Once; from one task. */
 esp_err_t espmirror_start(const espmirror_config_t *config);
 
 /* The screen copy to draw into, locked until espmirror_frame_end(); NULL

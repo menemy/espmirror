@@ -1,37 +1,264 @@
 /*
- * espmirror LVGL example: an LVGL display with no panel behind it. The mirror
- * takes every flush, so the user interface runs on a bare devkit and shows up
- * on your desktop; the viewer's keys move the slider.
+ * espmirror LVGL example: an LVGL display with no panel behind it, the mirror
+ * is the display. A bare devkit shows a user interface on your desktop:
  *
- * With a real panel, keep your display as it is and call
- * espmirror_attach_lvgl() once after espmirror_start().
+ *   - animations: a spinner, a ball on a spring, a bar
+ *   - the keys: the viewer's three buttons, and the board's own, light three
+ *     LEDs on screen; each also plays a sound
+ *   - touch: the viewer's mouse on the glass presses the on-screen buttons
+ *     and leaves a ripple
+ *   - sound: three small sounds synthesised here (a click, a chime, a tune)
+ *     play through the viewer (View > Sound) and through the board's speaker
+ *     when it has one
+ *   - the board's microphone, while the "mic" button is on or the main key
+ *     is held: in the spectrogram, and in the viewer (View > Mic)
+ *   - a spectrogram of what plays and of what the microphone hears, and of
+ *     your voice when you talk into the board from the viewer (View > Talk)
+ *   - the board's LED, reported to the viewer: on while a sound plays,
+ *     blinking slowly otherwise
+ *
+ * On a board the example knows (menuconfig, "The board"), the user interface
+ * is on the board's own panel too: board_aipi_lite.c drives the AIPI Lite's
+ * ST7789. On any other devkit the mirror is the only display. With your own
+ * panel driver, keep your display as it is and call espmirror_attach_lvgl()
+ * once after espmirror_start().
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <math.h>
 #include <stdio.h>
+#include <string.h>
 
+#include "board.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "espmirror.h"
 #include "espmirror_lvgl.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "nvs_flash.h"
 #include "protocol_examples_common.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "lvgl";
 
-#define W 240
-#define H 240
+#define W CONFIG_EXAMPLE_MIRROR_WIDTH
+#define H CONFIG_EXAMPLE_MIRROR_HEIGHT
+#define RATE 16000
+#define CHUNK 320                      /* 20 ms of audio */
+#define SMALL (W < 200 || H < 200)   /* a 128 px screen: smaller type, icons for words, no status line */
+#define SPEC_W (W - 16)
+#define SPEC_H (SMALL ? 32 : (H - 156 > 40 ? H - 156 : 40))   /* under the status line: 44 rows at 200, 84 at 240 */
+#define FFT_N 128
+
+/* ---- Sound: three small sounds, synthesised, 16 kHz mono --------------------- */
+
+enum { SOUND_NONE, SOUND_CLICK, SOUND_CHIME, SOUND_TUNE };
+
+static QueueHandle_t s_sounds;         /* what to play next, from the keys and the buttons */
+static int16_t s_tap[4096];            /* the latest audio, for the spectrogram: a ring */
+static volatile uint32_t s_tap_w;
+static portMUX_TYPE s_tap_mux = portMUX_INITIALIZER_UNLOCKED;
+static bool s_playing;               /* atomic access */
+
+static void tap_put(const int16_t *pcm, size_t n) {
+    portENTER_CRITICAL(&s_tap_mux);
+    for (size_t i = 0; i < n; i++) s_tap[(s_tap_w + i) % 4096] = pcm[i];
+    s_tap_w += n;
+    portEXIT_CRITICAL(&s_tap_mux);
+}
+
+/* One 20 ms chunk of the sound at time t (seconds); false once it is over. */
+static bool synth(int sound, float t, int16_t *out) {
+    static const float tune[] = {523.25f, 659.25f, 783.99f, 1046.5f, 783.99f, 659.25f, 523.25f, 392.0f};
+    for (int i = 0; i < CHUNK; i++) {
+        float tt = t + (float)i / RATE, v = 0;
+        switch (sound) {
+        case SOUND_CLICK:                      /* a burst of noise, gone in 15 ms */
+            if (tt < 0.015f) v = ((int)(esp_random() % 2000) - 1000) / 1000.0f * (1 - tt / 0.015f) * 0.6f;
+            break;
+        case SOUND_CHIME:                      /* two partials, a slow decay */
+            if (tt < 0.8f) v = (sinf(2 * (float)M_PI * 880 * tt) + 0.5f * sinf(2 * (float)M_PI * 1320 * tt)) * expf(-4 * tt) * 0.5f;
+            break;
+        case SOUND_TUNE: {                     /* eight notes, 150 ms each, a soft square */
+            int n = (int)(tt / 0.15f);
+            if (n < 8) {
+                float ph = fmodf(tt * tune[n], 1.0f), env = 1 - fmodf(tt, 0.15f) / 0.15f;
+                v = (ph < 0.5f ? 0.35f : -0.35f) * env * 0.8f + 0.2f * sinf(2 * (float)M_PI * tune[n] * tt) * env;
+            }
+            break;
+        }
+        }
+        out[i] = (int16_t)(v * 32767);
+    }
+    float len = sound == SOUND_CLICK ? 0.03f : sound == SOUND_CHIME ? 0.8f : 1.2f;
+    return t < len;
+}
+
+static bool s_has_audio;             /* the board's codec is up: the speaker plays, the microphone reads */
+static bool s_mic_toggle;            /* the on-screen mic button */
+static volatile unsigned s_keys_held;   /* keys down, from the viewer and the board, a bit per code */
+
+static void sound_task(void *arg) {
+    (void)arg;
+    int16_t pcm[CHUNK];
+    for (;;) {
+        int sound;
+        if (xQueueReceive(s_sounds, &sound, portMAX_DELAY) != pdTRUE) continue;
+        __atomic_store_n(&s_playing, true, __ATOMIC_RELAXED);
+        espmirror_set_led(ESPMIRROR_LED_ON);
+        TickType_t next = xTaskGetTickCount(), period = pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : 1;
+        for (float t = 0; synth(sound, t, pcm); t += (float)CHUNK / RATE) {
+            espmirror_audio_playback(pcm, CHUNK, 1);
+            tap_put(pcm, CHUNK);
+            if (s_has_audio) board_speaker_write(pcm, CHUNK);   /* paced by the codec; the delay keeps the viewer's pace */
+            vTaskDelayUntil(&next, period);
+        }
+        __atomic_store_n(&s_playing, false, __ATOMIC_RELAXED);
+        espmirror_set_led(ESPMIRROR_LED_BLINK_SLOW);
+    }
+}
+
+static void play(int sound) {
+    xQueueSend(s_sounds, &sound, 0);
+}
+
+/* The board's microphone, while asked for: to the spectrogram and to the viewer's Mic. */
+static bool mic_wanted(void) {
+    return s_has_audio && (__atomic_load_n(&s_mic_toggle, __ATOMIC_RELAXED)
+                           || (__atomic_load_n(&s_keys_held, __ATOMIC_RELAXED) & 1u << ESPMIRROR_KEY_MAIN));
+}
+
+static void mic_task(void *arg) {
+    (void)arg;
+    int16_t pcm[CHUNK];
+    for (;;) {
+        if (!mic_wanted()) {
+            vTaskDelay(pdMS_TO_TICKS(50) ? pdMS_TO_TICKS(50) : 1);
+            continue;
+        }
+        size_t n = board_mic_read(pcm, CHUNK);           /* blocks for 20 ms of audio */
+        if (!n) {
+            vTaskDelay(1);
+            continue;
+        }
+        espmirror_audio_capture(pcm, n);
+        tap_put(pcm, n);
+    }
+}
+
+/* The viewer talks into the board: its microphone goes to the spectrogram
+ * (and would go to a speaker). */
+static bool on_talk(bool on, void *user) {
+    (void)user;
+    ESP_LOGI(TAG, "viewer %s", on ? "talks" : "stopped talking");
+    return true;
+}
+
+static void on_talk_audio(const int16_t *mono, size_t samples, void *user) {
+    (void)user;
+    tap_put(mono, samples);
+}
+
+/* ---- Keys and touch from the viewer ------------------------------------------- */
+
+static QueueHandle_t s_keys;           /* (key << 1 | down), in order */
+static bool s_keys_lost;               /* the queue overflowed: every LED goes off, nothing stays pressed */
+static struct { int x, y; bool down; } s_pointer;
+static portMUX_TYPE s_pointer_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void key_event(int key, bool down) {
+    unsigned held = __atomic_load_n(&s_keys_held, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_keys_held, down ? held | 1u << key : held & ~(1u << key), __ATOMIC_RELAXED);
+    int ev = key << 1 | (down ? 1 : 0);
+    if (xQueueSend(s_keys, &ev, 0) != pdTRUE) __atomic_store_n(&s_keys_lost, true, __ATOMIC_RELAXED);
+}
+
+static void on_key(int key, bool down, void *user) {
+    (void)user;
+    key_event(key, down);
+}
+
+/* The board's own buttons, polled by the LVGL task: the same path as the viewer's keys. */
+static void board_keys_poll(void) {
+    static unsigned was;
+    unsigned now = board_keys_down();
+    for (int key = 1; key <= 3; key++) {
+        if ((now ^ was) & 1u << key) key_event(key, (now & 1u << key) != 0);
+    }
+    was = now;
+}
+
+static void on_pointer(int x, int y, bool down, void *user) {
+    (void)user;
+    portENTER_CRITICAL(&s_pointer_mux);
+    s_pointer.x = x;
+    s_pointer.y = y;
+    s_pointer.down = down;
+    portEXIT_CRITICAL(&s_pointer_mux);
+}
+
+static void pointer_read(lv_indev_t *indev, lv_indev_data_t *data) {
+    (void)indev;
+    portENTER_CRITICAL(&s_pointer_mux);
+    data->point.x = s_pointer.x;
+    data->point.y = s_pointer.y;
+    data->state = s_pointer.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    portEXIT_CRITICAL(&s_pointer_mux);
+}
+
+/* ---- The user interface ----------------------------------------------------------- */
 
 static SemaphoreHandle_t s_lv_lock;
-static lv_obj_t *s_slider, *s_label;
-static volatile int s_step;
+static lv_obj_t *s_leds[4], *s_ripple, *s_status, *s_canvas, *s_mic_btn;
+LV_DRAW_BUF_DEFINE_STATIC(s_spec_buf, SPEC_W, SPEC_H, LV_COLOR_FORMAT_RGB565);
+
+static void button_event(lv_event_t *e) {
+    play((int)(intptr_t)lv_event_get_user_data(e));
+}
+
+static void mic_button_event(lv_event_t *e) {
+    __atomic_store_n(&s_mic_toggle, lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED), __ATOMIC_RELAXED);
+}
+
+/* A microphone, drawn (LVGL's symbol font has none): a capsule on a stem over a base, centred in the button. */
+static lv_obj_t *mic_part(lv_obj_t *parent, int w, int h, int dx, int dy, int radius) {
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_radius(o, radius, 0);
+    lv_obj_set_style_bg_color(o, lv_color_white(), 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(o, LV_ALIGN_CENTER, dx, dy);
+    return o;
+}
+
+static void mic_icon(lv_obj_t *btn, bool small) {
+    int u = small ? 1 : 2;                                   /* the unit: 12 px tall at 128, 24 px otherwise */
+    mic_part(btn, 5 * u, 8 * u, 0, -2 * u, LV_RADIUS_CIRCLE); /* the capsule */
+    mic_part(btn, 1 * u, 3 * u, 0, 3 * u, 0);                /* the stem */
+    mic_part(btn, 6 * u, 1 * u, 0, 5 * u, 0);                /* the base */
+}
+
+static void ball_x(void *obj, int32_t v) {
+    lv_obj_set_x(obj, v);
+}
+
+static void ball_y(void *obj, int32_t v) {
+    lv_obj_set_y(obj, v);
+}
+
+static void bar_value(void *obj, int32_t v) {
+    lv_bar_set_value(obj, v, LV_ANIM_OFF);
+}
 
 /* No panel: the flush is done as soon as it starts (the mirror has copied it). */
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px) {
@@ -40,77 +267,314 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px) {
     lv_display_flush_ready(disp);
 }
 
-static void on_key(int key, bool down, void *user) {
-    (void)user;
-    if (!down) return;
-    s_step = key == ESPMIRROR_KEY_AUX ? -10 : key == ESPMIRROR_KEY_MAIN ? 10 : 0;
+static uint32_t tick_ms(void) {
+    return (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+static void build_ui(void) {
+    lv_obj_t *scr = lv_screen_active();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0x14161c), 0);
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Rows, from the top: the title, the LEDs, the buttons, the ball, the bar, (the status), the spectrogram. */
+    const int pad = SMALL ? 6 : 10, gap = SMALL ? 6 : 10;
+    const int y_led = SMALL ? 26 : 42, y_btn = SMALL ? 36 : 58, h_btn = SMALL ? 22 : 30;
+    const int y_ball = SMALL ? 64 : 92, ball_px = SMALL ? 12 : 18, bounce = SMALL ? 10 : 14, y_bar = SMALL ? 84 : 124;
+    const int w_btn = (W - 2 * pad - 3 * gap) / 4;   /* three sounds and the microphone */
+
+    lv_obj_t *title = lv_label_create(scr);
+    lv_label_set_text(title, "espmirror");
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_obj_set_style_text_font(title, SMALL ? &lv_font_montserrat_14 : &lv_font_montserrat_24, 0);
+    lv_obj_set_pos(title, pad, SMALL ? 6 : 8);
+
+    lv_obj_t *spinner = lv_spinner_create(scr);
+    lv_spinner_set_anim_params(spinner, 1200, 90);
+    lv_obj_set_size(spinner, SMALL ? 18 : 28, SMALL ? 18 : 28);
+    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(spinner, lv_color_hex(0x33d17a), LV_PART_INDICATOR);
+    lv_obj_align(spinner, LV_ALIGN_TOP_RIGHT, -pad, SMALL ? 4 : 8);
+
+    /* Three LEDs for the three keys; three buttons for the three sounds and one for the microphone
+     * (icons where words do not fit). */
+    static const char *names[] = {"click", "chime", "tune", NULL};
+    static const char *icons[] = {LV_SYMBOL_VOLUME_MID, LV_SYMBOL_BELL, LV_SYMBOL_PLAY, NULL};
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *btn = lv_button_create(scr);
+        lv_obj_set_size(btn, w_btn, h_btn);
+        lv_obj_set_pos(btn, pad + i * (w_btn + gap), y_btn);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a2e3a), 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x33d17a), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x33d17a), LV_STATE_CHECKED);
+        lv_obj_set_style_pad_all(btn, 2, 0);
+        if (i < 3) {
+            lv_obj_add_event_cb(btn, button_event, LV_EVENT_CLICKED, (void *)(intptr_t)(SOUND_CLICK + i));
+        } else {
+            lv_obj_add_flag(btn, LV_OBJ_FLAG_CHECKABLE);
+            lv_obj_add_event_cb(btn, mic_button_event, LV_EVENT_VALUE_CHANGED, NULL);
+            s_mic_btn = btn;
+        }
+        if (i == 3) {
+            mic_icon(btn, SMALL);
+            continue;
+        }
+        lv_obj_t *l = lv_label_create(btn);
+        lv_label_set_text(l, SMALL ? icons[i] : names[i]);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_center(l);
+
+        s_leds[i + 1] = lv_led_create(scr);
+        lv_obj_set_size(s_leds[i + 1], SMALL ? 8 : 12, SMALL ? 8 : 12);
+        lv_obj_set_pos(s_leds[i + 1], pad + i * (w_btn + gap) + w_btn / 2 - (SMALL ? 4 : 6), y_led);
+        lv_led_set_color(s_leds[i + 1], lv_color_hex(0x33d17a));
+        lv_led_off(s_leds[i + 1]);
+    }
+
+    /* The ball on a spring, and a bar that fills and empties. */
+    lv_obj_t *ball = lv_obj_create(scr);
+    lv_obj_set_size(ball, ball_px, ball_px);
+    lv_obj_set_style_radius(ball, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(ball, lv_color_hex(0xe95f3c), 0);
+    lv_obj_set_style_border_width(ball, 0, 0);
+    lv_obj_set_pos(ball, pad, y_ball);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, ball);
+    lv_anim_set_exec_cb(&a, ball_x);
+    lv_anim_set_values(&a, pad, W - pad - ball_px);
+    lv_anim_set_duration(&a, 1400);
+    lv_anim_set_playback_duration(&a, 1400);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, ball);
+    lv_anim_set_exec_cb(&a, ball_y);
+    lv_anim_set_values(&a, y_ball - 2, y_ball - 2 + bounce);
+    lv_anim_set_duration(&a, 450);
+    lv_anim_set_playback_duration(&a, 450);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_bounce);
+    lv_anim_start(&a);
+
+    lv_obj_t *bar = lv_bar_create(scr);
+    lv_obj_set_size(bar, W - 2 * pad, SMALL ? 4 : 6);
+    lv_obj_set_pos(bar, pad, y_bar);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x2a2e3a), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x5b8def), LV_PART_INDICATOR);
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, bar);
+    lv_anim_set_exec_cb(&a, bar_value);
+    lv_anim_set_values(&a, 0, 100);
+    lv_anim_set_duration(&a, 2600);
+    lv_anim_set_playback_duration(&a, 2600);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+
+    /* The spectrogram, scrolling left. */
+    LV_DRAW_BUF_INIT_STATIC(s_spec_buf);
+    s_canvas = lv_canvas_create(scr);
+    lv_canvas_set_draw_buf(s_canvas, &s_spec_buf);
+    lv_canvas_fill_bg(s_canvas, lv_color_hex(0x0b0c10), LV_OPA_COVER);
+    lv_obj_set_pos(s_canvas, 8, H - SPEC_H - (SMALL ? 4 : 6));
+
+    s_status = lv_label_create(scr);
+    lv_obj_set_style_text_color(s_status, lv_color_hex(0x8a8f9a), 0);
+    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
+    lv_obj_set_pos(s_status, 10, 130);
+    if (SMALL) lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);   /* no room: the line stays in the log */
+
+    /* The ripple under a touch, hidden until one. */
+    s_ripple = lv_obj_create(scr);
+    lv_obj_set_size(s_ripple, SMALL ? 18 : 28, SMALL ? 18 : 28);
+    lv_obj_set_style_radius(s_ripple, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_ripple, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_bg_opa(s_ripple, LV_OPA_40, 0);
+    lv_obj_set_style_border_width(s_ripple, 0, 0);
+    lv_obj_add_flag(s_ripple, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_ripple, LV_OBJ_FLAG_CLICKABLE);
+}
+
+/* ---- The spectrogram: a 128-point FFT of the latest audio, one column a tick ------- */
+
+static void fft(float *re, float *im, int n) {
+    for (int i = 1, j = 0; i < n; i++) {                      /* bit reversal */
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) j ^= bit;
+        j ^= bit;
+        if (i < j) {
+            float t = re[i]; re[i] = re[j]; re[j] = t;
+            t = im[i]; im[i] = im[j]; im[j] = t;
+        }
+    }
+    for (int len = 2; len <= n; len <<= 1) {
+        float ang = -2 * (float)M_PI / len, wr = cosf(ang), wi = sinf(ang);
+        for (int i = 0; i < n; i += len) {
+            float cr = 1, ci = 0;
+            for (int k = 0; k < len / 2; k++) {
+                int a = i + k, b = i + k + len / 2;
+                float tr = re[b] * cr - im[b] * ci, ti = re[b] * ci + im[b] * cr;
+                re[b] = re[a] - tr; im[b] = im[a] - ti;
+                re[a] += tr; im[a] += ti;
+                float ncr = cr * wr - ci * wi;
+                ci = cr * wi + ci * wr;
+                cr = ncr;
+            }
+        }
+    }
+}
+
+static uint16_t heat(float v) {                                 /* 0..1 to dark blue, blue, yellow, white */
+    v = v < 0 ? 0 : v > 1 ? 1 : v;
+    int r = v < .5f ? (int)(v * 2 * 255) : 255, g = v < .5f ? (int)(v * 2 * 120) : (int)(120 + (v - .5f) * 2 * 135);
+    int b = v < .5f ? (int)(60 + v * 2 * 195) : (int)(255 - (v - .5f) * 2 * 255);
+    return (uint16_t)((r & 0xF8) << 8 | (g & 0xFC) << 3 | b >> 3);
+}
+
+static void spectrogram_tick(void) {
+    static uint32_t seen;
+    static float window[FFT_N];
+    if (window[1] == 0) {
+        for (int i = 0; i < FFT_N; i++) window[i] = 0.5f - 0.5f * cosf(2 * (float)M_PI * i / (FFT_N - 1));
+    }
+    float re[FFT_N], im[FFT_N];
+    int16_t raw[FFT_N];
+    portENTER_CRITICAL(&s_tap_mux);                             /* only the copy, not the arithmetic */
+    uint32_t w = s_tap_w;
+    if (w == seen) {                                            /* nothing new: the picture stands */
+        portEXIT_CRITICAL(&s_tap_mux);
+        return;
+    }
+    seen = w;
+    for (int i = 0; i < FFT_N; i++) raw[i] = s_tap[(w - FFT_N + i) % 4096];
+    portEXIT_CRITICAL(&s_tap_mux);
+    for (int i = 0; i < FFT_N; i++) {
+        re[i] = raw[i] / 32768.0f * window[i];
+        im[i] = 0;
+    }
+    fft(re, im, FFT_N);
+    uint8_t *data = s_spec_buf.data;
+    uint32_t stride = s_spec_buf.header.stride;
+    for (int y = 0; y < SPEC_H; y++) {
+        uint16_t *row = (uint16_t *)(data + y * stride);
+        memmove(row, row + 1, (SPEC_W - 1) * 2);
+        int bin = 1 + (SPEC_H - 1 - y) * (FFT_N / 2 - 1) / (SPEC_H - 1);   /* low at the bottom */
+        float mag = sqrtf(re[bin] * re[bin] + im[bin] * im[bin]) / (FFT_N / 4);
+        float db = 20 * log10f(mag + 1e-5f);
+        row[SPEC_W - 1] = heat((db + 60) / 60);
+    }
+    lv_obj_invalidate(s_canvas);
 }
 
 static void lv_task(void *arg) {
     (void)arg;
+    TickType_t last = 0;
     for (;;) {
         xSemaphoreTake(s_lv_lock, portMAX_DELAY);
-        int step = s_step;
-        s_step = 0;
-        if (step) {
-            int v = lv_slider_get_value(s_slider) + step;
-            lv_slider_set_value(s_slider, v < 0 ? 0 : v > 100 ? 100 : v, LV_ANIM_ON);
+        board_keys_poll();
+        int ev;
+        if (__atomic_exchange_n(&s_keys_lost, false, __ATOMIC_RELAXED)) {
+            while (xQueueReceive(s_keys, &ev, 0) == pdTRUE) {}     /* what is queued may lack its release */
+            for (int k = 1; k <= 3; k++) lv_led_off(s_leds[k]);
         }
-        lv_label_set_text_fmt(s_label, "%d %%  ·  %lu s", (int)lv_slider_get_value(s_slider),
-                              (unsigned long)(esp_timer_get_time() / 1000000));
+        while (xQueueReceive(s_keys, &ev, 0) == pdTRUE) {
+            int key = ev >> 1;
+            bool down = ev & 1;
+            if (key >= 1 && key <= 3) {
+                if (down) lv_led_on(s_leds[key]); else lv_led_off(s_leds[key]);
+                if (down) play(SOUND_CLICK + key - 1);
+            }
+        }
+        bool down;
+        int px, py;
+        portENTER_CRITICAL(&s_pointer_mux);
+        down = s_pointer.down;
+        px = s_pointer.x;
+        py = s_pointer.y;
+        portEXIT_CRITICAL(&s_pointer_mux);
+        if (down) {
+            lv_obj_set_pos(s_ripple, px - (SMALL ? 9 : 14), py - (SMALL ? 9 : 14));
+            lv_obj_clear_flag(s_ripple, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_ripple, LV_OBJ_FLAG_HIDDEN);
+        }
+        spectrogram_tick();
+        /* The mic button shows the microphone's state, held key included. */
+        if (s_has_audio && mic_wanted() != lv_obj_has_state(s_mic_btn, LV_STATE_CHECKED)
+            && !__atomic_load_n(&s_mic_toggle, __ATOMIC_RELAXED)) {
+            if (mic_wanted()) lv_obj_add_state(s_mic_btn, LV_STATE_CHECKED); else lv_obj_clear_state(s_mic_btn, LV_STATE_CHECKED);
+        }
+        TickType_t now = xTaskGetTickCount();
+        if (now - last >= pdMS_TO_TICKS(500)) {
+            last = now;
+            lv_label_set_text_fmt(s_status, "%s  ·  %lu s  ·  %s", espmirror_connected() ? "viewer on" : "no viewer",
+                                  (unsigned long)(esp_timer_get_time() / 1000000),
+                                  mic_wanted() ? "mic" : __atomic_load_n(&s_playing, __ATOMIC_RELAXED) ? "playing" : "quiet");
+        }
         uint32_t wait = lv_timer_handler();
         xSemaphoreGive(s_lv_lock);
-        vTaskDelay(pdMS_TO_TICKS(wait < 5 ? 5 : wait > 50 ? 50 : wait));
+        TickType_t ticks = pdMS_TO_TICKS(wait < 20 ? 20 : wait > 40 ? 40 : wait);
+        vTaskDelay(ticks ? ticks : 1);
     }
 }
 
 void app_main(void) {
-    ESP_ERROR_CHECK(nvs_flash_init());
+    board_init();
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());         /* another image's NVS, or an old layout */
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(example_connect());
 
+    s_sounds = xQueueCreate(8, sizeof(int));
+    s_keys = xQueueCreate(16, sizeof(int));
+    s_lv_lock = xSemaphoreCreateMutex();
+    if (!s_sounds || !s_keys || !s_lv_lock) {
+        ESP_LOGE(TAG, "no memory for the queues");
+        return;
+    }
     const espmirror_config_t cfg = {
-        .name = "espmirror lvgl",
+        .name = CONFIG_EXAMPLE_MIRROR_NAME,
         .width = W,
         .height = H,
-        .ppi = 200,
+        .ppi = CONFIG_EXAMPLE_MIRROR_PPI,
         .corner_radius = 0,
         .on_key = on_key,
+        .on_pointer = on_pointer,
+        .on_talk = on_talk,
+        .on_talk_audio = on_talk_audio,
     };
     ESP_ERROR_CHECK(espmirror_start(&cfg));
+    espmirror_set_led(ESPMIRROR_LED_BLINK_SLOW);
+    err = board_audio_start();                        /* the board's codec, when the example knows it */
+    s_has_audio = err == ESP_OK;
+    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_LOGW(TAG, "the codec did not start: %s", esp_err_to_name(err));
 
     lv_init();
-    lv_tick_set_cb((lv_tick_get_cb_t)(void *)esp_timer_get_time);   /* microseconds: LVGL asks for ms */
-    static uint8_t buf[W * 40 * 2];
+    lv_tick_set_cb(tick_ms);
+    static uint8_t buf[W * 40 * 2] __attribute__((aligned(LV_DRAW_BUF_ALIGN)));
     lv_display_t *disp = lv_display_create(W, H);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(disp, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(disp, flush_cb);
+    err = board_display_start(disp);                 /* the board's panel, when the example knows it */
+    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_LOGW(TAG, "the panel did not start: %s", esp_err_to_name(err));
     ESP_ERROR_CHECK(espmirror_attach_lvgl(disp));
+    lv_indev_t *indev = lv_indev_create();
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev, pointer_read);
 
-    lv_obj_t *scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x181a20), 0);
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "LVGL with no panel");
-    lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 24);
-    s_slider = lv_slider_create(scr);
-    lv_obj_set_width(s_slider, 180);
-    lv_obj_align(s_slider, LV_ALIGN_CENTER, 0, 0);
-    lv_slider_set_value(s_slider, 40, LV_ANIM_OFF);
-    s_label = lv_label_create(scr);
-    lv_obj_set_style_text_color(s_label, lv_color_hex(0xc8c8c8), 0);
-    lv_obj_set_style_text_font(s_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(s_label, LV_ALIGN_BOTTOM_MID, 0, -24);
-    lv_obj_t *hint = lv_label_create(scr);
-    lv_label_set_text(hint, "keys 1 and 2 move the slider");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x8a8a8a), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
-    lv_obj_align(hint, LV_ALIGN_CENTER, 0, 40);
-
-    s_lv_lock = xSemaphoreCreateMutex();
-    xTaskCreate(lv_task, "lvgl", 6144, NULL, 4, NULL);
-    ESP_LOGI(TAG, "run tools/mirror_window.py <this board's IP> on your computer");
+    build_ui();
+    if (xTaskCreate(sound_task, "sound", 4096, NULL, 5, NULL) != pdPASS
+        || (s_has_audio && xTaskCreate(mic_task, "mic", 4096, NULL, 5, NULL) != pdPASS)
+        || xTaskCreate(lv_task, "lvgl", 8192, NULL, 4, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "no memory for the tasks");
+        return;
+    }
+    ESP_LOGI(TAG, "run tools/mirror_window.py <this board's IP> --sound on your computer");
 }

@@ -1,3 +1,4 @@
 dependencies:
-  espmirror:
-    path: ../../..
+  menemy/espmirror:
+    version: "*"
+    override_path: "../../.."

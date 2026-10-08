@@ -5,12 +5,18 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#if __has_include("lvgl.h")
+
 #include <string.h>
 
 #include "esp_log.h"
 #include "espmirror.h"
 #include "espmirror_lvgl.h"
 #include "lvgl.h"
+
+#if !LV_VERSION_CHECK(9, 5, 0)
+#error "espmirror's LVGL hook needs LVGL 9.5 or later (lv_display_get_buf_active, lv_display_get_render_mode)"
+#endif
 
 static const char *TAG = "espmirror";
 
@@ -32,7 +38,7 @@ static void flush_start(lv_event_t *e) {
     uint16_t *fb = espmirror_frame_begin();
     if (!fb) return;
     int w = lv_area_get_width(area), h = lv_area_get_height(area);
-    bool whole = buf->header.w >= sw && buf->header.h >= sh;
+    bool whole = lv_display_get_render_mode(disp) != LV_DISPLAY_RENDER_MODE_PARTIAL;   /* a screen-sized buffer */
     int x0 = area->x1 < 0 ? 0 : area->x1, x1 = area->x2 >= sw ? sw - 1 : area->x2;
     for (int y = 0; y < h && x1 >= x0; y++) {
         int ty = area->y1 + y;
@@ -63,3 +69,5 @@ esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
     ESP_LOGI(TAG, "on the LVGL flush");
     return ESP_OK;
 }
+
+#endif /* lvgl.h */

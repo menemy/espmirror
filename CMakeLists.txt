@@ -1,18 +1,7 @@
-set(srcs "src/espmirror.c")
-set(priv_reqs esp_timer lwip)
-
-# The LVGL hook compiles when LVGL is part of the build (the registry's lvgl/lvgl
-# or a local component named lvgl); the core needs no display library at all.
-idf_build_get_property(build_components BUILD_COMPONENTS)
-if("lvgl__lvgl" IN_LIST build_components OR "lvgl" IN_LIST build_components)
-    list(APPEND srcs "src/espmirror_lvgl.c")
-    if("lvgl__lvgl" IN_LIST build_components)
-        list(APPEND priv_reqs lvgl__lvgl)
-    else()
-        list(APPEND priv_reqs lvgl)
-    endif()
-endif()
-
-idf_component_register(SRCS ${srcs}
+# The core needs no display library. The LVGL hook is compiled too, and compiles
+# to nothing unless lvgl.h is there; the optional requirement makes it there
+# (and public, since espmirror_lvgl.h includes it) when LVGL is in the build.
+idf_component_register(SRCS "src/espmirror.c" "src/espmirror_lvgl.c"
                        INCLUDE_DIRS "include"
-                       PRIV_REQUIRES ${priv_reqs})
+                       PRIV_REQUIRES esp_timer lwip)
+idf_component_optional_requires(PUBLIC lvgl__lvgl lvgl)

@@ -22,3 +22,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# local handoffs and notes
+work_in_progress/

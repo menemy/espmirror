@@ -1,4 +1,6 @@
 dependencies:
-  espmirror:
-    path: ../../..
-  lvgl/lvgl: "^9.2"
+  menemy/espmirror:
+    version: "*"
+    override_path: "../../.."
+  lvgl/lvgl: "^9.5"
+  espressif/esp_codec_dev: "^1.3"
