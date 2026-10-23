@@ -65,10 +65,11 @@ DEVICES = [
     # Aluminium disc, two keys on the rim at about 2 and 4 o'clock: the top one is KEY3 (its double click is the
     # PWR press there), the bottom one BOOT.
     # Waveshare ESP32-S3-Touch-LCD-3.49 in case B: a blue bar, the 172 x 640 panel sideways, 84 x 22.58 mm active;
-    # its three buttons (brightness, power, reset) sit on the back of the case, drawn here on the bottom edge.
+    # its three buttons (brightness, power, reset) sit on the back of the case, drawn here on the bottom edge. The
+    # board's firmware reads two of them, BOOT (GPIO0) and PWR: sent as they happen, the firmware times the press.
     ("3.49", dict(screen_mm=84.0, body=dict(shape="rect", w=98.5, h=34.8, x=7.25, y=6.11, r=4.0, finish="blue"),
                   glass=dict(border=3.2, r=2.5), photo=dict(file="devices/waveshare-3.49b.png", screen=(59, 44, 874, 603)),
-                  keys=[("key3", 1, "bottom", 40.0, 5.0), ("pwr", 3, "bottom", 49.0, 5.0)], hold=False)),
+                  keys=[("boot", 2, "bottom", 40.0, 5.0), ("pwr", 3, "bottom", 49.0, 5.0)], hold=True)),
     # Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5: a black case 95.11 x 63.67 mm, R7.3, the 480 x 320 panel's 73.44 x
     # 48.96 mm active area at 10.84 / 7.34; PWR, RST and BOOT on the bottom edge towards the left.
     ("3.5", dict(screen_mm=73.44, body=dict(shape="rect", w=95.11, h=63.67, x=10.84, y=7.34, r=7.3, finish="black"),
