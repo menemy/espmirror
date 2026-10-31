@@ -1,6 +1,6 @@
 # Device photographs
 
-A profile in `tools/mirror_window.py` may point here: `photo=dict(file="devices/<name>.png", screen=(x, y, w, h))`.
+A profile in `tools/espmirror.py` may point here: `photo=dict(file="<name>.png", screen=(x, y, w, h))`.
 The viewer then draws the photograph as the body and puts the live screen into the rectangle; the keys and the
 LED stay where the profile's millimetres say.
 

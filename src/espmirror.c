@@ -1,26 +1,49 @@
 /*
- * espmirror: the board's screen, keys, LED and audio on a desktop, over TCP.
+ * espmirror: the board's screen, keys, LED and audio on a desktop, over USB or TCP.
  *
  * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "sdkconfig.h"
 #include "espmirror.h"
+#include "espmirror_core.h"
+#include "espmirror_usb.h"
+#include <math.h>
+#include <stdlib.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include "esp_mac.h"
+#include "esp_rom_crc.h"
+#if CONFIG_ESPMIRROR_WIFI
+#include "mdns.h"
+#endif
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#if CONFIG_ESPMIRROR_WIFI
 #include <sys/socket.h>
+#include "lwip/sockets.h"
+#endif
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "lwip/sockets.h"
-#include "sdkconfig.h"
+#ifndef CONFIG_ESPMIRROR_WIFI
+#define CONFIG_ESPMIRROR_WIFI 0
+#endif
+#ifndef CONFIG_ESPMIRROR_AUDIO
+#define CONFIG_ESPMIRROR_AUDIO 0
+#endif
+#ifndef CONFIG_ESPMIRROR_USB_AUTO
+#define CONFIG_ESPMIRROR_USB_AUTO 0
+#endif
 
 static const char *TAG = "espmirror";
 
@@ -36,7 +59,7 @@ static const char *TAG = "espmirror";
  * 1/0 (talk through the speaker, or stop), 'S', a format byte and PCM16 mono
  * 16 kHz (the viewer's microphone), anything else keeps the connection. */
 #define PORT        CONFIG_ESPMIRROR_PORT
-#define HELLO       "MIRR1\n"
+#define HELLO       "MIRROR1\n"
 #define MSG_MAX     (CONFIG_ESPMIRROR_MSG_KB * 1024)
 #define BAND_PX     ((MSG_MAX - 64) / 2)   /* a band of a big rectangle always fits a message raw */
 #define WHOLE_PX    60000      /* up to this a rectangle is coded in one piece */
@@ -69,23 +92,44 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
 static volatile uint8_t s_state;
 
-static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
-static struct { int x1, y1, x2, y2; } s_dirty[MAX_DIRTY];
-static int s_ndirty;
-static struct { int x1, y1, x2, y2; bool on; } s_tail;   /* what did not fit the last message: first next time */
+static espmirror_core_t s_core;
+static uint16_t *s_previous;
+static char s_board[2048];
+static size_t s_board_len;
+static atomic_bool s_serial;
+static atomic_bool s_serial_open, s_session_busy;
+#define SERIAL_QUIET_MS 6000
+#define SERIAL_HELLO 0xffff
+#define SERIAL_BYE 0xfffe
+#define LOG_WAIT_MS 50
+#define KEYS 11
+#define SERIAL_QUEUE 32
+static const uint8_t s_mark[] = { 0, 'M', 'I', 'R', 'R', 'O', 'R', '1', '\n' };
+typedef struct { uint16_t len; uint8_t b[IN_MAX]; } serial_msg_t;
+static QueueHandle_t s_serial_in;
+static SemaphoreHandle_t s_serial_tx, s_serial_done;
+
+#define PTR_Q 32
+typedef struct { uint16_t x, y; bool down, edge; } ptr_t;
+static portMUX_TYPE s_ptr_mux = portMUX_INITIALIZER_UNLOCKED;
+static ptr_t s_ptr_q[PTR_Q], s_ptr;
+static unsigned s_ptr_head, s_ptr_n;
+static int s_ptr_x, s_ptr_y;
 
 /* The TCP side, all on the mirror task: the viewer's connection with the
  * message being received, and one candidate still saying hello (the viewer
  * keeps the screen until the candidate is admitted). */
-static int s_listen = -1;
-static int s_cfd = -1;
 static uint8_t *s_in;
+static int s_cfd = -1;
+#if CONFIG_ESPMIRROR_WIFI
+static int s_listen = -1;
 static size_t s_inn;
 static int64_t s_in_until;
 static int s_pfd = -1;
 static uint8_t s_hb[sizeof(HELLO) - 1];
 static size_t s_hn;
 static int64_t s_p_until;
+#endif
 static volatile uint8_t s_led_mode, s_led_sent = 0xFF;   /* the LED as driven; what the viewer was last told */
 static int s_tap_key;          /* a key tapped from the viewer, let go at s_tap_until */
 static int64_t s_tap_until;
@@ -102,6 +146,10 @@ static bool s_talk;                  /* the viewer's microphone plays through th
 #endif
 
 static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb, int ms);
+static bool viewer_send(const void *buf, size_t len, int ms);
+static void serial_end(void);
+static void viewer_drop(void);
+static bool viewer_on(void) { return espmirror_connected(); }
 static void tcp_drop(void);
 
 static void *alloc(size_t size, bool zero) {
@@ -114,31 +162,50 @@ static void *alloc(size_t size, bool zero) {
 }
 
 static void dirty_add(int x1, int y1, int x2, int y2) {
-    portENTER_CRITICAL(&s_mux);
-    for (int i = 0; i < s_ndirty; i++) {
-        /* Touching or overlapping: one rectangle. */
-        if (x1 <= s_dirty[i].x2 + 1 && x2 >= s_dirty[i].x1 - 1 && y1 <= s_dirty[i].y2 + 1 && y2 >= s_dirty[i].y1 - 1) {
-            if (x1 < s_dirty[i].x1) s_dirty[i].x1 = x1;
-            if (y1 < s_dirty[i].y1) s_dirty[i].y1 = y1;
-            if (x2 > s_dirty[i].x2) s_dirty[i].x2 = x2;
-            if (y2 > s_dirty[i].y2) s_dirty[i].y2 = y2;
-            portEXIT_CRITICAL(&s_mux);
-            return;
-        }
-    }
-    if (s_ndirty < MAX_DIRTY) {
-        s_dirty[s_ndirty].x1 = x1;
-        s_dirty[s_ndirty].y1 = y1;
-        s_dirty[s_ndirty].x2 = x2;
-        s_dirty[s_ndirty].y2 = y2;
-        s_ndirty++;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    espmirror_core_dirty(&s_core, x1, y1, x2, y2);
+    xSemaphoreGive(s_lock);
+}
+
+static void refresh(void) {
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    espmirror_core_reset(&s_core);
+    espmirror_core_dirty(&s_core, 0, 0, s_w - 1, s_h - 1);
+    xSemaphoreGive(s_lock);
+}
+
+static void pointer_put(int x, int y, bool down) {
+    portENTER_CRITICAL(&s_ptr_mux);
+    bool was = s_ptr_n ? s_ptr_q[(s_ptr_head + s_ptr_n - 1) % PTR_Q].down : s_ptr.down;
+    ptr_t value = { x, y, down, down != was };
+    unsigned last = (s_ptr_head + s_ptr_n - 1) % PTR_Q;
+    if (s_ptr_n && !value.edge && !s_ptr_q[last].edge) {
+        s_ptr_q[last] = value;
     } else {
-        if (x1 < s_dirty[0].x1) s_dirty[0].x1 = x1;
-        if (y1 < s_dirty[0].y1) s_dirty[0].y1 = y1;
-        if (x2 > s_dirty[0].x2) s_dirty[0].x2 = x2;
-        if (y2 > s_dirty[0].y2) s_dirty[0].y2 = y2;
+        if (s_ptr_n == PTR_Q) {
+            /* Overflow cancels the gesture before accepting a new press. */
+            s_ptr_head = 0;
+            s_ptr_n = 1;
+            s_ptr_q[0] = (ptr_t){ x, y, false, true };
+        }
+        s_ptr_q[(s_ptr_head + s_ptr_n++) % PTR_Q] = value;
     }
-    portEXIT_CRITICAL(&s_mux);
+    portEXIT_CRITICAL(&s_ptr_mux);
+    s_ptr_x = x; s_ptr_y = y;
+    if (s_cfg.on_pointer) s_cfg.on_pointer(x, y, down, s_cfg.user);
+}
+
+bool espmirror_pointer_read(int *x, int *y, bool *down) {
+    portENTER_CRITICAL(&s_ptr_mux);
+    if (s_ptr_n) {
+        s_ptr = s_ptr_q[s_ptr_head];
+        s_ptr_head = (s_ptr_head + 1) % PTR_Q;
+        s_ptr_n--;
+    }
+    *x = s_ptr.x; *y = s_ptr.y; *down = s_ptr.down;
+    bool more = s_ptr_n > 0;
+    portEXIT_CRITICAL(&s_ptr_mux);
+    return more;
 }
 
 /* ---- The public side -------------------------------------------------------- */
@@ -165,9 +232,9 @@ static bool clip(int x, int y, int width, int height, int *x1, int *y1, int *x2,
 
 void espmirror_frame_end(int x, int y, int width, int height) {
     if (!__atomic_load_n(&s_fb, __ATOMIC_ACQUIRE)) return;
-    xSemaphoreGive(s_lock);
     int x1, y1, x2, y2;
-    if (clip(x, y, width, height, &x1, &y1, &x2, &y2)) dirty_add(x1, y1, x2, y2);
+    if (clip(x, y, width, height, &x1, &y1, &x2, &y2)) espmirror_core_dirty(&s_core, x1, y1, x2, y2);
+    xSemaphoreGive(s_lock);
 }
 
 void espmirror_draw(int x, int y, int width, int height, const uint16_t *rgb565, int stride) {
@@ -197,18 +264,18 @@ void espmirror_set_led(uint8_t mode) {
 }
 
 bool espmirror_connected(void) {
-    return __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0;
+    return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0;
 }
 
 /* Mirror task: the LED's state to the viewer when it changed since it was last told. */
 static void led_pump(void) {
     uint8_t mode = __atomic_load_n(&s_led_mode, __ATOMIC_RELAXED);
-    if (s_cfd < 0 || mode == s_led_sent) return;
+    if (!viewer_on() || mode == s_led_sent) return;
     uint8_t msg[2] = {'L', mode};
-    if (tcp_send(s_cfd, msg, 2, NULL, 0, SEND_MS)) {
+    if (viewer_send(msg, 2, SEND_MS)) {
         s_led_sent = mode;
     } else {
-        tcp_drop();                        /* part of a message may be out: nothing may follow it */
+        viewer_drop();                     /* part of a message may be out: nothing may follow it */
     }
 }
 
@@ -283,7 +350,7 @@ static void talk_set(bool on) {
  * The chunk is taken under the ring's lock, sent after it. */
 static void audio_pump(void) {
     uint8_t src = __atomic_load_n(&s_aud_src, __ATOMIC_RELAXED);
-    if (!src || s_cfd < 0) return;
+    if (!src || !viewer_on()) return;
     for (int i = 0; i < AUD_BURST; i++) {
         portENTER_CRITICAL(&s_aud_mux);
         uint32_t w = s_aud_w, r = s_aud_r;
@@ -303,9 +370,9 @@ static void audio_pump(void) {
         if (!have) return;
         s_aud_out[0] = 'A';
         s_aud_out[1] = src;
-        if (!tcp_send(s_cfd, s_aud_out, 2 + AUD_CHUNK, NULL, 0, SEND_MS)) {
+        if (!viewer_send(s_aud_out, 2 + AUD_CHUNK, SEND_MS)) {
             ESP_LOGW(TAG, "viewer too slow or gone, closing");
-            tcp_drop();
+            viewer_drop();
             return;
         }
     }
@@ -325,6 +392,7 @@ void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
 
 /* ---- Coding ------------------------------------------------------------------ */
 
+#if CONFIG_ESPMIRROR_WIFI
 static inline void put16(uint8_t *p, uint32_t v) {
     p[0] = v;
     p[1] = v >> 8;
@@ -335,133 +403,18 @@ static inline void put32(uint8_t *p, uint32_t v) {
     put16(p + 2, v >> 16);
 }
 
-/* Run-length pairs (count, colour) over a rectangle in row order, or in
- * column order (vertical bars code several times smaller that way). out NULL
- * only counts. */
-static size_t rle(uint8_t *out, int x, int y, int w, int h, bool cols) {
-    size_t n = 0;
-    uint16_t c = 0;
-    uint32_t run = 0;
-    int outer = cols ? w : h, inner = cols ? h : w;
-    for (int a = 0; a < outer; a++) {
-        const uint16_t *line = cols ? s_fb + y * s_w + x + a : s_fb + (y + a) * s_w + x;
-        int step = cols ? s_w : 1;
-        for (int b = 0; b < inner; b++) {
-            uint16_t px = line[b * step];
-            if (run && px == c && run < 0xFFFF) {
-                run++;
-                continue;
-            }
-            if (run) {
-                if (out) {
-                    put16(out + n, run);
-                    put16(out + n + 2, c);
-                }
-                n += 4;
-            }
-            c = px;
-            run = 1;
-        }
-    }
-    if (out) {
-        put16(out + n, run);
-        put16(out + n + 2, c);
-    }
-    return n + 4;
-}
+#endif
 
-/* One rectangle in the shortest of raw, row runs and (when asked) column
- * runs; 0 when it does not fit in room. */
-static size_t code_rect(uint8_t *out, size_t room, int x, int y, int w, int h, bool try_cols) {
-    size_t raw = (size_t)w * h * 2, rows = rle(NULL, x, y, w, h, false);
-    size_t cols = try_cols ? rle(NULL, x, y, w, h, true) : SIZE_MAX;
-    int enc = rows <= cols && rows < raw ? 1 : cols < raw ? 2 : 0;
-    size_t n = enc == 1 ? rows : enc == 2 ? cols : raw;
-    if (RECT_HDR + n > room) return 0;
-    uint8_t *p = out + RECT_HDR;
-    if (enc) {
-        rle(p, x, y, w, h, enc == 2);
-    } else {
-        for (int r = 0; r < h; r++) {
-            const uint16_t *row = s_fb + (y + r) * s_w + x;
-            for (int i = 0; i < w; i++) put16(p + ((size_t)r * w + i) * 2, row[i]);
-        }
-    }
-    put16(out, x);
-    put16(out + 2, y);
-    put16(out + 4, w);
-    put16(out + 6, h);
-    out[8] = enc;
-    out[9] = 0;
-    put32(out + 10, n);
-    return RECT_HDR + n;
-}
-
-/* Fills s_msg from the dirty list under s_lock; what does not fit stays dirty
- * for the next message. */
 static size_t build_msg(void) {
-    struct { int x1, y1, x2, y2; } todo[MAX_DIRTY];
-    int nt;
-    portENTER_CRITICAL(&s_mux);
-    nt = s_ndirty;
-    memcpy(todo, s_dirty, sizeof(todo[0]) * nt);
-    s_ndirty = 0;
-    portEXIT_CRITICAL(&s_mux);
-
-    s_msg[0] = 'F';
-    s_msg[1] = __atomic_load_n(&s_state, __ATOMIC_RELAXED);
-    put16(s_msg + 4, s_w);
-    put16(s_msg + 6, s_h);
-    size_t len = 8;
-    int rects = 0;
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    /* The tail of the last message first (so a screen that changes all the time still gets through to its
-     * bottom), then the dirty list; a tail that does not fit stays for the next message. */
-    bool tail_first = s_tail.on;
-    s_tail.on = false;
-    for (int i = tail_first ? -1 : 0; i < nt; i++) {
-        int x1 = i < 0 ? s_tail.x1 : todo[i].x1, y1 = i < 0 ? s_tail.y1 : todo[i].y1;
-        int x2 = i < 0 ? s_tail.x2 : todo[i].x2, y2 = i < 0 ? s_tail.y2 : todo[i].y2;
-        if (x2 >= s_w) x2 = s_w - 1;
-        if (y2 >= s_h) y2 = s_h - 1;
-        if (x1 < 0 || y1 < 0 || x1 > x2 || y1 > y2) continue;
-        int w = x2 - x1 + 1, h_all = y2 - y1 + 1;
-        size_t n = 0;
-        if ((size_t)w * h_all <= WHOLE_PX) n = code_rect(s_msg + len, MSG_MAX - len, x1, y1, w, h_all, true);
-        if (n) {
-            len += n;
-            rects++;
-            continue;
-        }
-        /* Big, or too big for this message as a whole: bands whose raw size always fits an empty message. */
-        int band = BAND_PX / w > 0 ? BAND_PX / w : 1;
-        for (int y = y1; y <= y2;) {
-            int h = y2 - y + 1 < band ? y2 - y + 1 : band;
-            n = code_rect(s_msg + len, MSG_MAX - len, x1, y, w, h, false);
-            if (!n) {
-                if (s_tail.on) {
-                    dirty_add(x1, y, x2, y2);       /* a second tail waits its turn behind the first */
-                } else {
-                    s_tail.x1 = x1;
-                    s_tail.y1 = y;
-                    s_tail.x2 = x2;
-                    s_tail.y2 = y2;
-                    s_tail.on = true;
-                }
-                break;
-            }
-            len += n;
-            rects++;
-            y += h;
-        }
-    }
+    size_t n = espmirror_core_build(&s_core, s_fb, s_msg, MSG_MAX, s_state);
     xSemaphoreGive(s_lock);
-    put16(s_msg + 2, rects);
-    return len;
+    return n;
 }
 
 /* ---- The TCP side ------------------------------------------------------------- */
 
+#if CONFIG_ESPMIRROR_WIFI
 /* The whole buffer by the deadline; short writes and a full socket buffer are retried. */
 static bool send_until(int fd, const void *buf, size_t len, int64_t until) {
     size_t done = 0;
@@ -488,16 +441,20 @@ static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb,
 }
 
 static bool send_board(int fd) {
-    char j[200];
-    int n = snprintf(j, sizeof(j), "B{\"forms\":[],\"board\":{\"name\":\"%s\",\"w\":%d,\"h\":%d,\"ppi\":%d,\"r\":%d}}",
-                     s_name, s_w, s_h, s_cfg.ppi, s_cfg.corner_radius);
-    return n > 0 && n < (int)sizeof(j) && tcp_send(fd, j, n, NULL, 0, SEND_MS);
+    return tcp_send(fd, s_board, s_board_len, NULL, 0, SEND_MS);
 }
+
+#else
+static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb, int ms) {
+    (void)fd; (void)a; (void)na; (void)b; (void)nb; (void)ms;
+    return false;
+}
+#endif
 
 /* A key the viewer holds (bit in s_held) or taps (s_tap_key until
  * s_tap_until); the board sees it down while either says so. */
 static void key_set(int code, bool down) {
-    if (!s_cfg.on_key || code < 1 || code > 3) return;
+    if (!s_cfg.on_key || code < 1 || code > 10) return;
     bool was = (s_held & 1u << code) || (s_tap_until && s_tap_key == code);
     if (down) s_held |= 1u << code;
     else s_held &= ~(1u << code);
@@ -515,13 +472,18 @@ static void tap_end(void) {
 /* Every key the viewer had down is let go: on its way out, nothing may stay pressed. */
 static void keys_release(void) {
     tap_end();
-    for (int code = 1; code <= 3; code++) {
+    for (int code = 1; code <= 10; code++) {
         if (s_held & 1u << code) key_set(code, false);
     }
 }
 
 /* A message from the viewer. */
 static void input(const uint8_t *buf, size_t len) {
+    if (len == 1 && buf[0] == 'R') {
+        refresh();
+        if (!viewer_send(s_board, s_board_len, SEND_MS)) viewer_drop();
+        return;
+    }
 #if CONFIG_ESPMIRROR_AUDIO
     if (len == 2 && buf[0] == 7) {
         audio_set(buf[1]);
@@ -531,7 +493,7 @@ static void input(const uint8_t *buf, size_t len) {
         talk_set(buf[1] != 0);
         return;
     }
-    if (len > 2 && buf[0] == 'S') {
+    if (len > 2 && len <= 642 && buf[0] == 'S') {
         if (s_talk && s_cfg.on_talk_audio && buf[1] == 1 && (len - 2) % 2 == 0) {
             int16_t pcm[(IN_MAX - 2) / 2];               /* aligned: the message buffer's offset is odd */
             memcpy(pcm, buf + 2, len - 2);
@@ -540,19 +502,18 @@ static void input(const uint8_t *buf, size_t len) {
         return;
     }
 #endif
-    if (len == 2 && buf[0] == 3 && buf[1] >= 1 && buf[1] <= 6) {
-        /* A tap, or the long press (4 PWR, 5 KEY3, 6 BOOT) as a plain press here. */
-        int code = buf[1] <= 3 ? buf[1] : buf[1] == 4 ? 3 : buf[1] == 5 ? 1 : 2;
+    if (len == 2 && buf[0] == 3 && buf[1] >= 1 && buf[1] <= 10) {
+        int code = buf[1];
         tap_end();
         bool was = (s_held & 1u << code) != 0;
         s_tap_key = code;
         s_tap_until = esp_timer_get_time() + TAP_MS * 1000LL;
         if (s_cfg.on_key && !was) s_cfg.on_key(code, true, s_cfg.user);
-    } else if (len == 3 && buf[0] == 6 && buf[1] >= 1 && buf[1] <= 3) {
+    } else if (len == 3 && buf[0] == 6) {
         key_set(buf[1], buf[2] != 0);
-    } else if (len == 5 && buf[0] <= 1 && s_cfg.on_pointer) {
+    } else if (len == 5 && buf[0] <= 1 && (s_cfg.touch || s_cfg.on_pointer)) {
         int x = buf[1] | buf[2] << 8, y = buf[3] | buf[4] << 8;
-        if (x < s_w && y < s_h) s_cfg.on_pointer(x, y, buf[0] == 1, s_cfg.user);
+        if (x < s_w && y < s_h) pointer_put(x, y, buf[0] != 0);
     }
 }
 
@@ -560,18 +521,23 @@ static void input(const uint8_t *buf, size_t len) {
 static void tcp_drop(void) {
     if (s_cfd < 0) return;
     keys_release();
-    if (s_cfg.on_pointer) s_cfg.on_pointer(0, 0, false, s_cfg.user);
+    pointer_put(s_ptr_x, s_ptr_y, false);
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
     talk_set(false);
 #endif
+#if CONFIG_ESPMIRROR_WIFI
     close(s_cfd);
+#endif
     __atomic_store_n(&s_cfd, -1, __ATOMIC_RELAXED);
+#if CONFIG_ESPMIRROR_WIFI
     s_inn = 0;
+#endif
     ESP_LOGI(TAG, "viewer left");
     if (s_cfg.on_viewer) s_cfg.on_viewer(false, s_cfg.user);
 }
 
+#if CONFIG_ESPMIRROR_WIFI
 static void tcp_unpend(void) {
     s_pfd = -1;
     s_hn = 0;
@@ -621,6 +587,7 @@ static void tcp_admit(int fd) {
         tcp_send(s_cfd, "T", 1, NULL, 0, 500);
         tcp_drop();                        /* its keys and audio end with it */
     }
+    if (s_serial) { viewer_send("T", 1, 500); serial_end(); }
     __atomic_store_n(&s_cfd, fd, __ATOMIC_RELAXED);
     s_inn = 0;
     if (!send_board(fd)) {
@@ -628,7 +595,7 @@ static void tcp_admit(int fd) {
         return;
     }
     s_led_sent = 0xFF;                     /* the new viewer gets the LED's state at once */
-    dirty_add(0, 0, s_w - 1, s_h - 1);     /* the whole screen first */
+    refresh();
     ESP_LOGI(TAG, "viewer connected");
     if (s_cfg.on_viewer) s_cfg.on_viewer(true, s_cfg.user);
 }
@@ -683,6 +650,7 @@ static void tcp_accept(void) {
 static void tcp_wait(int ms) {
     fd_set rf;
     FD_ZERO(&rf);
+    if (s_listen < 0) { vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1); return; }
     FD_SET(s_listen, &rf);
     int mx = s_listen;
     if (s_cfd >= 0) {
@@ -694,8 +662,7 @@ static void tcp_wait(int ms) {
         if (s_pfd > mx) mx = s_pfd;
     }
     struct timeval tv = {.tv_sec = ms / 1000, .tv_usec = (ms % 1000) * 1000};
-    bool idle = s_cfd < 0 && s_pfd < 0 && !s_tap_until;
-    if (select(mx + 1, &rf, NULL, NULL, idle ? NULL : &tv) < 0) {
+    if (select(mx + 1, &rf, NULL, NULL, &tv) < 0) {
         vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1);
         return;
     }
@@ -706,31 +673,227 @@ static void tcp_wait(int ms) {
     if (s_tap_until && now > s_tap_until) tap_end();
 }
 
+#else
+static void tcp_wait(int ms) { vTaskDelay(pdMS_TO_TICKS(ms) ? pdMS_TO_TICKS(ms) : 1); }
+#endif
+
+#define SERIAL_CHUNK 128
+
+static bool serial_write(const void *buf, size_t len, int64_t until)
+{
+    for (const uint8_t *p = buf; len;) {
+        int64_t left = until - esp_timer_get_time();
+        if (left <= 0) return false;
+        size_t n = len < SERIAL_CHUNK ? len : SERIAL_CHUNK;
+        int ms = left / 1000;
+        int written = espmirror_usb_write(p, n, ms < 200 ? ms : 200);
+        if (written <= 0) continue;
+        p += written;
+        len -= written;
+    }
+    return true;
+}
+
+static bool serial_send(const void *buf, size_t len, int ms)
+{
+    uint8_t hdr[6] = { 0xA5, 0x5A, len, len >> 8, len >> 16, len >> 24 };
+    uint32_t crc = esp_rom_crc32_le(0, hdr + 2, 4);
+    crc = esp_rom_crc32_le(crc, buf, len);
+    uint8_t tail[4] = { crc, crc >> 8, crc >> 16, crc >> 24 };
+    int64_t until = esp_timer_get_time() + ms * 1000LL;
+    if (xSemaphoreTake(s_serial_tx, pdMS_TO_TICKS(ms)) != pdTRUE) return false;
+    bool ok = serial_write(hdr, sizeof(hdr), until) && serial_write(buf, len, until)
+              && serial_write(tail, sizeof(tail), until);
+    xSemaphoreGive(s_serial_tx);
+    return ok;
+}
+
+static bool viewer_send(const void *buf, size_t len, int ms)
+{
+    return s_serial ? serial_send(buf, len, ms) : tcp_send(s_cfd, buf, len, NULL, 0, ms);
+}
+
+static void serial_end(void)
+{
+    if (!s_serial) return;
+    keys_release();
+#if CONFIG_ESPMIRROR_AUDIO
+    audio_set(0);
+    talk_set(false);
+#endif
+    if (s_cfg.on_viewer) s_cfg.on_viewer(false, s_cfg.user);
+    pointer_put(s_ptr_x, s_ptr_y, false);
+    s_serial = false;
+    s_serial_open = false;             /* the console's session stops within a second */
+}
+
+static void serial_admit(void)
+{
+    if (!s_serial_open) return;
+    if (s_cfd >= 0) { tcp_send(s_cfd, "T", 1, NULL, 0, 500); tcp_drop(); }
+    s_serial = true;
+    s_led_sent = 0xff;
+    if (s_cfg.on_viewer) s_cfg.on_viewer(true, s_cfg.user);
+    if (!viewer_send(s_board, s_board_len, SEND_MS)) {
+        serial_end();
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    espmirror_core_reset(&s_core);
+    espmirror_core_dirty(&s_core, 0, 0, s_w - 1, s_h - 1);
+    xSemaphoreGive(s_lock);
+}
+
+static void serial_pump(void)
+{
+    serial_msg_t m;
+    for (int i = 0; i < 8 && s_serial_in && xQueueReceive(s_serial_in, &m, 0) == pdTRUE; i++) {
+        if (m.len == SERIAL_HELLO) {
+            serial_admit();
+        } else if (m.len == SERIAL_BYE) {
+            if (s_serial) viewer_send("E", 1, 500);   /* the viewer stops sending and asks again */
+            serial_end();
+            xSemaphoreGive(s_serial_done);
+        } else if (s_serial && s_serial_open) {
+            input(m.b, m.len);
+        }
+    }
+}
+
+static char s_log_line[512];  /* protected by s_serial_tx; logging tasks can have small stacks */
+static atomic_uint s_log_dropped;
+
+static int serial_log(const char *fmt, va_list ap)
+{
+    if (xSemaphoreTake(s_serial_tx, pdMS_TO_TICKS(LOG_WAIT_MS)) != pdTRUE) {
+        atomic_fetch_add(&s_log_dropped, 1);
+        return 0;
+    }
+    int64_t until = esp_timer_get_time() + LOG_WAIT_MS * 1000LL;
+    unsigned dropped = atomic_exchange(&s_log_dropped, 0);
+    if (dropped) {
+        int n = snprintf(s_log_line, sizeof(s_log_line), "\nmirror: %u log records dropped (TX busy)\n", dropped);
+        if (!serial_write(s_log_line, n, until)) atomic_fetch_add(&s_log_dropped, dropped);
+    }
+    va_list copy;
+    va_copy(copy, ap);
+    int n = vsnprintf(s_log_line, sizeof(s_log_line), fmt, copy);
+    va_end(copy);
+    char *line = s_log_line;
+    bool ok = n <= 0;
+    if (n > 0) {
+        if ((size_t)n >= sizeof(s_log_line)) {
+            line = malloc((size_t)n + 1);
+            if (line) vsnprintf(line, (size_t)n + 1, fmt, ap);
+        }
+        ok = line && serial_write(line, n, until);
+        if (!ok) atomic_fetch_add(&s_log_dropped, 1);
+    }
+    if (line != s_log_line) free(line);
+    xSemaphoreGive(s_serial_tx);
+    return ok ? n : 0;
+}
+
+static bool serial_enqueue(const serial_msg_t *m, bool *pointer_down)
+{
+    bool pointer = m->len == 5 && m->b[0] <= 1;
+    bool move = pointer && m->b[0] && *pointer_down;
+    if (xQueueSend(s_serial_in, m, move ? 0 : pdMS_TO_TICKS(SEND_MS)) != pdTRUE) return move;
+    if (pointer) *pointer_down = m->b[0] != 0;
+    return true;
+}
+
+esp_err_t espmirror_serial_session(void)
+{
+    if (!espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
+    if (!s_ready || !s_serial_in || atomic_exchange(&s_session_busy, true)) return ESP_ERR_INVALID_STATE;
+    vprintf_like_t log = esp_log_set_vprintf(serial_log);
+    vTaskDelay(pdMS_TO_TICKS(50));     /* a log line already on its way finishes first */
+    serial_msg_t m = { .len = SERIAL_HELLO };
+    s_serial_open = true;
+    xSemaphoreTake(s_serial_tx, portMAX_DELAY);
+    bool marked = serial_write(s_mark, sizeof(s_mark), esp_timer_get_time() + SEND_MS * 1000LL);
+    xSemaphoreGive(s_serial_tx);
+    if (marked && xQueueSend(s_serial_in, &m, pdMS_TO_TICKS(500)) == pdTRUE) {
+        int64_t heard = esp_timer_get_time();
+        bool pointer_down = false;
+        while (s_serial_open) {
+            uint8_t hdr[4];
+            if (!espmirror_usb_read(hdr, 1, 1000)) {
+                if (esp_timer_get_time() - heard > SERIAL_QUIET_MS * 1000LL) break;
+                continue;
+            }
+            if (!s_serial_open || !espmirror_usb_read(hdr + 1, 3, IN_MS)) break;
+            size_t n = hdr[0] | hdr[1] << 8;
+            if (hdr[2] || hdr[3] || n > IN_MAX) break;   /* not a viewer's message: the console is the console again */
+            if (n && !espmirror_usb_read(m.b, n, IN_MS)) break;
+            m.len = n;
+            heard = esp_timer_get_time();
+            if (!serial_enqueue(&m, &pointer_down)) break;
+        }
+    }
+    s_serial_open = false;
+    m.len = SERIAL_BYE;
+    xQueueSend(s_serial_in, &m, portMAX_DELAY);
+    /* No console reuse or hook restoration until the mirror task has consumed the final BYE. */
+    xSemaphoreTake(s_serial_done, portMAX_DELAY);
+    /* What the viewer sent meanwhile is no console command: a finger's x of 122 is 'z', sleep. */
+    uint8_t c;
+    for (int64_t until = esp_timer_get_time() + 2000000; esp_timer_get_time() < until && espmirror_usb_read(&c, 1, 150); ) {
+    }
+    esp_log_set_vprintf(log);
+    s_session_busy = false;
+    return ESP_OK;
+}
+
+
+static void viewer_drop(void) {
+    if (s_serial) serial_end(); else tcp_drop();
+}
+
+static void console_task(void *arg) {
+    (void)arg;
+    while (!s_ready) vTaskDelay(1);
+    char line[64];
+    size_t used = 0;
+    bool bad = false;
+    for (;;) {
+        uint8_t ch;
+        if (!espmirror_usb_read(&ch, 1, 1000)) continue;
+        if (ch == '\n' || ch == '\r') {
+            line[used] = 0;
+            if (!bad && (!strcmp(line, "mirror") || !strcmp(line, ">mirror"))) espmirror_serial_session();
+            used = 0; bad = false;
+        } else if (ch >= 32 && ch < 127 && used < sizeof(line) - 1) {
+            line[used++] = ch;
+        } else {
+            bad = true;
+        }
+    }
+}
+
 static void mirror_task(void *arg) {
     (void)arg;
     int64_t last_beat = 0, last_frame = 0;
-    while (!__atomic_load_n(&s_ready, __ATOMIC_ACQUIRE)) vTaskDelay(1);
+    while (!s_ready) vTaskDelay(1);
     for (;;) {
-        tcp_wait(FRAME_MS);
+        serial_pump();
+        tcp_wait(10);
+        serial_pump();
+        if (s_tap_until && esp_timer_get_time() > s_tap_until) tap_end();
         led_pump();
 #if CONFIG_ESPMIRROR_AUDIO
         audio_pump();
 #endif
-        if (s_cfd < 0) continue;
+        if (!viewer_on()) continue;
         int64_t now = esp_timer_get_time() / 1000;
-        portENTER_CRITICAL(&s_mux);
-        bool dirty = s_ndirty > 0;
-        portEXIT_CRITICAL(&s_mux);
-        dirty = dirty || s_tail.on;                 /* the tail is the mirror task's own */
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool dirty = espmirror_core_pending(&s_core);
+        xSemaphoreGive(s_lock);
         if (now - last_frame < FRAME_MS || (!dirty && now - last_beat < BEAT_MS)) continue;
         last_beat = last_frame = now;
         size_t len = build_msg();
-        if (!tcp_send(s_cfd, s_msg, len, NULL, 0, SEND_MS)) {
-            ESP_LOGW(TAG, "viewer too slow or gone, closing");
-            tcp_drop();
-        }
-        /* A send that waited on the viewer may have outlasted a tap. */
-        if (s_tap_until && esp_timer_get_time() > s_tap_until) tap_end();
+        if (!viewer_send(s_msg, len, SEND_MS)) viewer_drop();
     }
 }
 
@@ -743,6 +906,8 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         return ESP_ERR_INVALID_ARG;
     }
     if (s_task) return ESP_ERR_INVALID_STATE;
+    if (config->button_count > 10 || (config->button_count && !config->buttons)) return ESP_ERR_INVALID_ARG;
+    if (!CONFIG_ESPMIRROR_WIFI && !espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
     s_cfg = *config;
     /* The name as JSON needs it: a bounded copy, quotes and backslashes escaped, control characters out. */
     size_t at = 0;
@@ -758,6 +923,50 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     s_name[at] = 0;
     s_w = config->width;
     s_h = config->height;
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    float diagonal = config->diagonal > 0 ? config->diagonal
+        : config->ppi > 0 ? hypotf(s_w, s_h) / config->ppi : 0;
+    s_board_len = snprintf(s_board, sizeof(s_board),
+        "B{\"version\":2,\"name\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+        "\"w\":%d,\"h\":%d,\"round\":%s,\"diag\":%.3f,\"touch\":%s,\"keyboard\":%s,"
+        "\"audio\":%s,\"buttons\":[",
+        s_name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_w, s_h,
+        (config->round || config->corner_radius * 2 >= (s_w < s_h ? s_w : s_h)) ? "true" : "false",
+        (double)diagonal, (config->touch || config->on_pointer) ? "true" : "false",
+        config->keyboard ? "true" : "false", CONFIG_ESPMIRROR_AUDIO ? "true" : "false");
+    for (size_t i = 0; i < (config->button_count ? config->button_count : 3); i++) {
+        int role = config->button_count ? config->buttons[i].role : (int)i + 1;
+        int x = config->button_count ? config->buttons[i].x : -1;
+        int y = config->button_count ? config->buttons[i].y : -1;
+        if (role < 1 || role > 10) return ESP_ERR_INVALID_ARG;
+        char label[96]; size_t n = 0;
+        const char *name = config->button_count ? config->buttons[i].name : i == 0 ? "AUX" : i == 1 ? "MAIN" : "POWER";
+        for (const unsigned char *p = (const unsigned char *)(name ? name : ""); *p && n + 2 < sizeof(label); p++) {
+            if (*p < 32) continue;
+            if (*p == '"' || *p == '\\') label[n++] = '\\';
+            label[n++] = *p;
+        }
+        label[n] = 0;
+        int added = snprintf(s_board + s_board_len, sizeof(s_board) - s_board_len,
+            "%s{\"role\":%d,\"name\":\"%s\",\"x\":%d,\"y\":%d}", i ? "," : "", role, label, x, y);
+        if (added < 0 || (size_t)added >= sizeof(s_board) - s_board_len) return ESP_ERR_INVALID_ARG;
+        s_board_len += added;
+    }
+    if (s_board_len + 3 > sizeof(s_board)) return ESP_ERR_INVALID_ARG;
+    memcpy(s_board + s_board_len, "]}", 3); s_board_len += 2;
+    unsigned flags = 0;
+#if CONFIG_ESPMIRROR_DELTA
+    flags |= ESPMIRROR_DELTA;
+    s_previous = alloc((size_t)s_w * s_h * 2, true);
+#endif
+#if CONFIG_ESPMIRROR_QOI
+    flags |= ESPMIRROR_QOI;
+#endif
+    if (!espmirror_core_init_ex(&s_core, s_w, s_h, flags, s_previous)) return ESP_ERR_NO_MEM;
+    s_serial_in = xQueueCreate(SERIAL_QUEUE, sizeof(serial_msg_t));
+    s_serial_tx = xSemaphoreCreateMutex();
+    s_serial_done = xSemaphoreCreateBinary();
     SemaphoreHandle_t lock = xSemaphoreCreateMutex();
     uint16_t *fb = alloc((size_t)s_w * s_h * sizeof(uint16_t), true);
     uint8_t *msg = alloc(MSG_MAX, false);
@@ -769,18 +978,28 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #else
     bool audio_ok = true;
 #endif
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
+#if CONFIG_ESPMIRROR_WIFI
+    int fd = -1;
+    fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
     int one = 1;
+#endif
     esp_err_t err = ESP_OK;
     const char *fail = NULL;
-    if (!lock || !fb || !msg || !in || !audio_ok) {
+    if (!lock || !fb || !msg || !in || !audio_ok || !s_serial_in || !s_serial_tx || !s_serial_done) {
         fail = "no memory for the screen copy";
         err = ESP_ERR_NO_MEM;
-    } else if (fd < 0 || setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0
+    }
+#if CONFIG_ESPMIRROR_WIFI
+    else if (fd < 0 || setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0
                || bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(fd, 1) < 0) {
         fail = "no TCP port";
         err = ESP_FAIL;
+    }
+#endif
+    if (!fail && espmirror_usb_supported() && !config->external_console) {
+        err = espmirror_usb_install();
+        if (err != ESP_OK) fail = "USB driver unavailable";
     }
     if (!fail) {
         s_lock = lock;
@@ -790,7 +1009,9 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         s_aud = aud;
         s_aud_out = aud_out;
 #endif
+#if CONFIG_ESPMIRROR_WIFI
         s_listen = fd;
+#endif
         BaseType_t ok = CONFIG_ESPMIRROR_TASK_CORE >= 0
             ? xTaskCreatePinnedToCore(mirror_task, "espmirror", CONFIG_ESPMIRROR_TASK_STACK, NULL,
                                       CONFIG_ESPMIRROR_TASK_PRIORITY, &s_task, CONFIG_ESPMIRROR_TASK_CORE)
@@ -800,7 +1021,9 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
             fail = "no task";
             err = ESP_ERR_NO_MEM;
             s_task = NULL;
+#if CONFIG_ESPMIRROR_WIFI
             s_listen = -1;
+#endif
             s_msg = NULL;
             s_in = NULL;
             s_lock = NULL;
@@ -810,9 +1033,17 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #endif
         }
     }
+    if (!fail && espmirror_usb_supported() && !config->external_console && CONFIG_ESPMIRROR_USB_AUTO) {
+        if (xTaskCreate(console_task, "mirror_console", 4096, NULL, 3, NULL) != pdPASS) {
+            vTaskDelete(s_task); s_task = NULL;
+            fail = "no console task"; err = ESP_ERR_NO_MEM;
+        }
+    }
     if (fail) {
         ESP_LOGE(TAG, "%s (errno %d): no live screen", fail, errno);
+#if CONFIG_ESPMIRROR_WIFI
         if (fd >= 0) close(fd);
+#endif
         heap_caps_free(fb);
         heap_caps_free(msg);
         heap_caps_free(in);
@@ -821,10 +1052,27 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         heap_caps_free(aud_out);
 #endif
         if (lock) vSemaphoreDelete(lock);
+        if (s_serial_in) vQueueDelete(s_serial_in);
+        if (s_serial_tx) vSemaphoreDelete(s_serial_tx);
+        if (s_serial_done) vSemaphoreDelete(s_serial_done);
+        s_serial_in = NULL; s_serial_tx = NULL; s_serial_done = NULL;
+        heap_caps_free(s_previous); s_previous = NULL;
+        espmirror_usb_uninstall();
         return err;
     }
     __atomic_store_n(&s_fb, fb, __ATOMIC_RELEASE);   /* the drawing side may call in from now on */
     __atomic_store_n(&s_ready, true, __ATOMIC_RELEASE);   /* and the task may serve */
+#if CONFIG_ESPMIRROR_WIFI
+    esp_err_t mdns = mdns_init();
+    if (mdns == ESP_OK) mdns_hostname_set("espmirror");
+    if (mdns == ESP_OK || mdns == ESP_ERR_INVALID_STATE) {
+        char width[8], height[8], address[18];
+        snprintf(width, sizeof(width), "%d", s_w); snprintf(height, sizeof(height), "%d", s_h);
+        snprintf(address, sizeof(address), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        mdns_txt_item_t txt[] = {{"version", "2"}, {"width", width}, {"height", height}, {"mac", address}};
+        mdns_service_add(s_name, "_musemirror", "_tcp", PORT, txt, 4);
+    }
+#endif
     ESP_LOGI(TAG, "%s, %d x %d, port %d", s_name, s_w, s_h, PORT);
     return ESP_OK;
 }

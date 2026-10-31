@@ -7,6 +7,7 @@
  * xiaozhi-esp32's aipi-lite board. ESP-IDF 5.3 or later (the I2C master
  * driver esp_codec_dev takes).
  *
+ * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
  */
 

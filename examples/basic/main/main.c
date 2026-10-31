@@ -3,6 +3,7 @@
  * mirror's screen copy and your desktop shows it, 240 x 240 at a few frames
  * a second: a clock, a bouncing square, and the keys you press in the viewer.
  *
+ * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -88,7 +89,7 @@ void app_main(void) {
         .on_pointer = on_pointer,
     };
     ESP_ERROR_CHECK(espmirror_start(&cfg));
-    ESP_LOGI(TAG, "run tools/mirror_window.py <this board's IP> on your computer");
+    ESP_LOGI(TAG, "run tools/espmirror.py <this board's IP> on your computer");
 
     int x = 20, y = 60, dx = 3, dy = 2;
     unsigned frame = 0;

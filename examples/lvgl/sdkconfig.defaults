@@ -5,3 +5,5 @@ CONFIG_LV_FONT_MONTSERRAT_24=y
 # LVGL with its fonts and Wi-Fi is over 1 MB: the large single-app table on a 4 MB flash.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+CONFIG_ESPMIRROR_WIFI=y

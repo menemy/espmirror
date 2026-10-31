@@ -3,6 +3,7 @@
  * knows them. Any other devkit gets the stubs: the mirror is the display, the
  * sounds play on the viewer, the keys come from the viewer.
  *
+ * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
  */
 

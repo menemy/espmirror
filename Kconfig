@@ -1,5 +1,35 @@
 menu "espmirror"
 
+    config ESPMIRROR_USB
+        bool "USB Serial/JTAG mirror"
+        depends on SOC_USB_SERIAL_JTAG_SUPPORTED
+        depends on !ESP_CONSOLE_UART_DEFAULT && !ESP_CONSOLE_UART_CUSTOM && !ESP_CONSOLE_USB_CDC
+        default y
+        help
+            Native USB Serial/JTAG only. Select the USB Serial/JTAG console
+            or no console. UART and USB OTG CDC consoles are not supported.
+
+    config ESPMIRROR_USB_AUTO
+        bool "Install the USB driver and read mirror commands"
+        depends on ESPMIRROR_USB
+        default y
+        help
+            Disable when the application reads the console itself. Set
+            external_console in the config if it also installs the driver.
+
+    config ESPMIRROR_WIFI
+        bool "TCP and mDNS mirror (no authentication)"
+        default n
+
+    config ESPMIRROR_DELTA
+        bool "Try XOR delta rectangles"
+        default n
+
+    config ESPMIRROR_QOI
+        bool "Try QOI rectangles"
+        default n
+
+
     config ESPMIRROR_PORT
         int "TCP port the viewer connects to"
         range 1 65535

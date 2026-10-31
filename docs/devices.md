@@ -3,8 +3,8 @@
 The viewer draws the board as the physical device: the body in millimetres,
 the glass, the keys where they are on the case, the LED. The board names
 itself in the `B` message (`espmirror_config_t.name`); the viewer looks for a
-fragment of that name in `DEVICES` in `tools/mirror_window.py` and takes the
-first match. No match: a plain frame around the screen, with no keys.
+fragment of that name in `DEVICES` in `tools/espmirror.py` and takes the
+first match. No match: a plain frame around the screen. The board advertises its keys and may supply pixel position hints. Hints take precedence over the profile’s key positions.
 
 Built in:
 
@@ -34,7 +34,7 @@ One entry in `DEVICES`, all sizes in millimetres from the maker's drawing:
                                        # length
     hold=True,                         # keys are held while the mouse is down (push-to-talk boards);
                                        # False taps them
-    led=(5.5, 46.5, 1.6, (0x30, 0xd0, 0x60)),   # optional: centre x, y, diameter, colour
+    led=dict(x=5.5, y=46.5, d=1.6, colour=(0x30, 0xd0, 0x60)),   # optional: centre x, y, diameter, colour
 )),
 ```
 
@@ -42,19 +42,18 @@ A round body: `body=dict(shape="round", d=55.0, finish="silver")`, keys with
 `"angle"` and their position in degrees clockwise from the top.
 
 The screen's pixel size and corner radius come from the board (`width`,
-`height`, `corner_radius` in `espmirror_config_t`); `ppi` lets View > Actual
+`height`, `corner_radius` in `espmirror_config_t`); `diagonal` (inches), or the older `ppi`, lets View > Actual
 size show the device at its real size.
 
 ## Looking at a profile without the board
 
-`tools/fake_board.py "Waveshare 1.54G" 200 200` serves the protocol on
-127.0.0.1 with a test pattern; `tools/mirror_window.py 127.0.0.1` then
-shows the profile the name picks, and the fake board prints what the viewer
-sends (keys, pointer, listen).
+`tools/fake_board.py --board waveshare-s3-154g` serves the protocol on
+127.0.0.1 with a test pattern; `tools/espmirror.py 127.0.0.1` then
+shows the profile the name picks, and the fake board highlights keys and pointer input. Sound and Mic play test tones; its LED cycles through all four modes.
 
 ## A photograph instead of a drawing
 
-Add `photo=dict(file="devices/<name>.png", screen=(x, y, w, h))` to the
+Add `photo=dict(file="<name>.png", screen=(x, y, w, h))` to the
 profile: a front-on photograph of the device with the background cut out,
 and the screen's active area in the photo's pixels. The six built-in profiles carry mock-ups an image model made from
 photographs of the devices (straight on, screen off, background removed),

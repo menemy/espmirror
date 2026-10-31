@@ -18,6 +18,13 @@ jobs:
           # The registry's LVGL manifest needs component manager 2 (ESP-IDF 5.4+).
           - idf: "v5.1"
             example: lvgl
+        include:
+          - idf: "v5.4"
+            example: virtual
+            target: esp32s3
+          - idf: "v6.0.1"
+            example: virtual
+            target: esp32s3
     steps:
       - uses: actions/checkout@v5
       - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
@@ -34,4 +41,8 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: python -m py_compile tools/mirror_window.py tools/fake_board.py
+      - run: python -m py_compile tools/espmirror.py tools/fake_board.py
+      - run: python -m pip install -r tools/requirements.txt
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+        env:
+          QT_QPA_PLATFORM: offscreen

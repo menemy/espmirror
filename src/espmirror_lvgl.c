@@ -54,6 +54,14 @@ static void flush_start(lv_event_t *e) {
     espmirror_frame_end(area->x1, area->y1, w, h);
 }
 
+static void pointer_read(lv_indev_t *indev, lv_indev_data_t *data) {
+    (void)indev;
+    int x, y; bool down;
+    data->continue_reading = espmirror_pointer_read(&x, &y, &down);
+    data->point.x = x; data->point.y = y;
+    data->state = down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
 esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
     if (!disp) disp = lv_display_get_default();
     if (!disp) return ESP_ERR_INVALID_STATE;
@@ -64,6 +72,11 @@ esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
         ESP_LOGW(TAG, "the display is %d x %d, the mirror %d x %d", (int)lv_display_get_horizontal_resolution(disp),
                  (int)lv_display_get_vertical_resolution(disp), sw, sh);
     }
+    lv_indev_t *pointer = lv_indev_create();
+    if (!pointer) return ESP_ERR_NO_MEM;
+    lv_indev_set_type(pointer, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_display(pointer, disp);
+    lv_indev_set_read_cb(pointer, pointer_read);
     lv_display_add_event_cb(disp, flush_start, LV_EVENT_FLUSH_START, NULL);
     lv_obj_invalidate(lv_display_get_screen_active(disp));   /* the whole screen once, for the copy */
     ESP_LOGI(TAG, "on the LVGL flush");

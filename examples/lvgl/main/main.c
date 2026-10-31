@@ -23,6 +23,7 @@
  * panel driver, keep your display as it is and call espmirror_attach_lvgl()
  * once after espmirror_start().
  *
+ * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -202,15 +203,6 @@ static void on_pointer(int x, int y, bool down, void *user) {
     s_pointer.x = x;
     s_pointer.y = y;
     s_pointer.down = down;
-    portEXIT_CRITICAL(&s_pointer_mux);
-}
-
-static void pointer_read(lv_indev_t *indev, lv_indev_data_t *data) {
-    (void)indev;
-    portENTER_CRITICAL(&s_pointer_mux);
-    data->point.x = s_pointer.x;
-    data->point.y = s_pointer.y;
-    data->state = s_pointer.down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     portEXIT_CRITICAL(&s_pointer_mux);
 }
 
@@ -565,9 +557,6 @@ void app_main(void) {
     err = board_display_start(disp);                 /* the board's panel, when the example knows it */
     if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_LOGW(TAG, "the panel did not start: %s", esp_err_to_name(err));
     ESP_ERROR_CHECK(espmirror_attach_lvgl(disp));
-    lv_indev_t *indev = lv_indev_create();
-    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-    lv_indev_set_read_cb(indev, pointer_read);
 
     build_ui();
     if (xTaskCreate(sound_task, "sound", 4096, NULL, 5, NULL) != pdPASS
@@ -576,5 +565,5 @@ void app_main(void) {
         ESP_LOGE(TAG, "no memory for the tasks");
         return;
     }
-    ESP_LOGI(TAG, "run tools/mirror_window.py <this board's IP> --sound on your computer");
+    ESP_LOGI(TAG, "run tools/espmirror.py <this board's IP> --sound on your computer");
 }

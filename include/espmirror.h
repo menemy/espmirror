@@ -1,5 +1,5 @@
 /*
- * espmirror: the board's screen, keys, LED and audio on a desktop, over TCP.
+ * espmirror: the board's screen, keys, LED and audio on a desktop, over USB or TCP.
  *
  * Copyright (c) 2026 Maksim Nagaev
  * SPDX-License-Identifier: Apache-2.0
@@ -37,6 +37,12 @@ extern "C" {
 #define ESPMIRROR_LED_ON         3
 
 typedef struct {
+    int role;
+    const char *name;
+    int x, y;
+} espmirror_button_t;
+
+typedef struct {
     /* The board, as the viewer labels it and picks its look by: a name with
      * "2.16", "1.54G", "1.75C" or "AIPI" in it gets that device's body and
      * buttons, anything else a plain frame. */
@@ -50,7 +56,7 @@ typedef struct {
     void (*on_key)(int key, bool down, void *user);
 
     /* The viewer's mouse on the glass, as a touch: down at x, y (screen
-     * pixels), moved while down, or up. Up once more, at 0, 0, when the
+     * pixels), moved while down, or up. Released at its last position when the
      * viewer leaves. From the mirror task. NULL ignores it. */
     void (*on_pointer)(int x, int y, bool down, void *user);
 
@@ -70,13 +76,30 @@ typedef struct {
     void (*on_talk_audio)(const int16_t *mono, size_t samples, void *user);
 
     void *user;
+
+    bool round;
+    float diagonal;         /* inches; 0 derives it from ppi */
+    bool touch;
+    bool keyboard;
+    const espmirror_button_t *buttons; /* copied at start; at most 10 */
+    size_t button_count;
+    bool external_console; /* app installs USB Serial/JTAG and calls serial_session */
 } espmirror_config_t;
 
-/* Starts the mirror task and listens on CONFIG_ESPMIRROR_PORT. After the
- * network is up (the viewer needs an IP to connect to, the socket does not).
+/* Starts the mirror task. USB is the default; CONFIG_ESPMIRROR_WIFI adds TCP.
+ * The app establishes Wi-Fi when it enables that transport.
  * Keeps a copy of the screen, width x height RGB565; copies the config (the
  * name too, 47 characters at most). Once; from one task. */
 esp_err_t espmirror_start(const espmirror_config_t *config);
+
+/* App console handler: after reading a complete "mirror" line, relinquish RX
+ * and run this blocking session in that same task. Returns after input release,
+ * TX completion and log-hook restoration. UART/USB CDC return NOT_SUPPORTED. */
+esp_err_t espmirror_serial_session(void);
+
+/* The LVGL adapter consumes these queued pointer edges. Applications with their
+ * own input driver may use this too. Returns true when more samples remain. */
+bool espmirror_pointer_read(int *x, int *y, bool *down);
 
 /* The screen copy to draw into, locked until espmirror_frame_end(); NULL
  * before espmirror_start(). Tell what changed, in pixels; the viewer gets it
