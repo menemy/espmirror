@@ -7,7 +7,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 
-#define CONFIG_ESPMIRROR_WIFI 1
+#define CONFIG_ESPMIRROR_TCP 1
 #define IN_MAX 64
 #define SERIAL_HELLO 0xffff
 #define SERIAL_BYE 0xfffe

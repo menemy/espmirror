@@ -33,4 +33,22 @@ menu "Virtual display"
         help
             GPIO0 on the XIAO ESP32S3 and ESP32-S3-DevKitC-1.
             Release BOOT while resetting to run the application.
+
+    config VIRTUAL_WIFI
+        bool "Join a Wi-Fi network; the mirror listens on TCP too"
+        depends on SPIRAM
+        select ESPMIRROR_TCP
+        default n
+        help
+            Needs PSRAM (Component config > ESP PSRAM, octal on the XIAO
+            ESP32S3 and the DevKitC-1 N8R8). Without it the 240 x 240 mirror
+            leaves Wi-Fi too little internal RAM to start.
+
+    config VIRTUAL_WIFI_SSID
+        string "Wi-Fi network"
+        depends on VIRTUAL_WIFI
+
+    config VIRTUAL_WIFI_PASSWORD
+        string "Wi-Fi password"
+        depends on VIRTUAL_WIFI
 endmenu

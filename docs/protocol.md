@@ -8,7 +8,7 @@ application authentication or encryption. TCP is an explicit developer option.
 
 ## Session and transport
 
-TCP listens on port 7331 by default when `CONFIG_ESPMIRROR_WIFI=y`. The app
+TCP listens on port 7331 by default when `CONFIG_ESPMIRROR_TCP=y`. The app
 establishes its network connection. mDNS advertises `_musemirror._tcp`, TXT
 `version=2`, `width`, `height`, and `mac`. This shared service name and the hello
 `MIRROR1\n` are retained from Muse for compatibility. The protocol version is
@@ -19,6 +19,15 @@ USB Serial/JTAG is the default on supported targets with the console configured
 for native USB Serial/JTAG or disabled. UART and USB OTG CDC consoles are not
 supported; `espmirror_serial_session()` returns `ESP_ERR_NOT_SUPPORTED`.
 With no usable transport, start returns that error too.
+
+With `CONFIG_ESPMIRROR_USB_NETWORK=y` the native USB port is a TinyUSB device
+instead: its CDC-ACM serial port carries the serial session below unchanged,
+and its CDC-NCM network reaches the TCP port at `192.168.N.1`. The component
+owns TinyUSB and runs the line reader itself; `external_console` is refused.
+The application's esp_tinyusb settings give the product string, which must
+contain `espmirror` so a viewer tells the board from other Espressif VID
+devices, and an empty serial string, which esp_tinyusb 2.4.0 and later turns
+into the MAC.
 
 A host opens the USB serial port, sends four FF bytes, waits 500 ms, and sends
 `\n>mirror\n`. The FF bytes terminate an old session; they are not an electrical

@@ -876,11 +876,21 @@ class SerialTests(unittest.TestCase):
                     ('/dev/ttyACM0', None, 0x303a, 0x1001),
                     ('/dev/cu.usbmodem1', 'aa:bb:cc:dd:ee:01', 0x303a, 0x1001),
                     ('COM13', None, 0x1234, 0x1001)]]
+        data += [SimpleNamespace(device='/dev/cu.usbmodem2', serial_number='1020BA050328', vid=0x303a, pid=0x4001,
+                                 product='espmirror', interface=None),
+                 SimpleNamespace(device='/dev/cu.usbmodem3', serial_number='1020BA050329', vid=0x303a, pid=0x4001,
+                                 product='Espressif Device', interface=None),
+                 # pyserial on Windows fills neither product nor interface.
+                 SimpleNamespace(device='COM14', serial_number='1020BA05032A', vid=0x303a, pid=0x4001,
+                                 product=None, interface=None),
+                 SimpleNamespace(device='COM15', serial_number='1020BA05032B', vid=0x303a, pid=0x0002,
+                                 product=None, interface=None)]
         listing = SimpleNamespace(comports=lambda: data)
         with patch.dict(sys.modules, {'serial.tools': SimpleNamespace(list_ports=listing)}), \
                 patch.object(mirror, 'open_serial') as probe:
             self.assertEqual(mirror.usb_boards(), [('COM12', 'aa:bb:cc:dd:ee:ff'),
-                ('/dev/ttyACM0', ''), ('/dev/cu.usbmodem1', 'aa:bb:cc:dd:ee:01')])
+                ('/dev/ttyACM0', ''), ('/dev/cu.usbmodem1', 'aa:bb:cc:dd:ee:01'),
+                ('/dev/cu.usbmodem2', '10:20:ba:05:03:28'), ('COM14', '10:20:ba:05:03:2a')])
             probe.assert_not_called()
 
     def test_hupcl_cleared_before_handshake_and_close(self):

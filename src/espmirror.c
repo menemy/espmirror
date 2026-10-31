@@ -15,7 +15,7 @@
 #include <stdatomic.h>
 #include "esp_mac.h"
 #include "esp_rom_crc.h"
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 #include "mdns.h"
 #endif
 
@@ -23,7 +23,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 #include <sys/socket.h>
 #include "lwip/sockets.h"
 #endif
@@ -35,14 +35,17 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#ifndef CONFIG_ESPMIRROR_WIFI
-#define CONFIG_ESPMIRROR_WIFI 0
+#ifndef CONFIG_ESPMIRROR_TCP
+#define CONFIG_ESPMIRROR_TCP 0
 #endif
 #ifndef CONFIG_ESPMIRROR_AUDIO
 #define CONFIG_ESPMIRROR_AUDIO 0
 #endif
 #ifndef CONFIG_ESPMIRROR_USB_AUTO
 #define CONFIG_ESPMIRROR_USB_AUTO 0
+#endif
+#ifndef CONFIG_ESPMIRROR_USB_NETWORK
+#define CONFIG_ESPMIRROR_USB_NETWORK 0
 #endif
 
 static const char *TAG = "espmirror";
@@ -121,7 +124,7 @@ static int s_ptr_x, s_ptr_y;
  * keeps the screen until the candidate is admitted). */
 static uint8_t *s_in;
 static int s_cfd = -1;
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 static int s_listen = -1;
 static size_t s_inn;
 static int64_t s_in_until;
@@ -392,7 +395,7 @@ void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
 
 /* ---- Coding ------------------------------------------------------------------ */
 
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 static inline void put16(uint8_t *p, uint32_t v) {
     p[0] = v;
     p[1] = v >> 8;
@@ -414,7 +417,7 @@ static size_t build_msg(void) {
 
 /* ---- The TCP side ------------------------------------------------------------- */
 
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 /* The whole buffer by the deadline; short writes and a full socket buffer are retried. */
 static bool send_until(int fd, const void *buf, size_t len, int64_t until) {
     size_t done = 0;
@@ -526,18 +529,18 @@ static void tcp_drop(void) {
     audio_set(0);
     talk_set(false);
 #endif
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
     close(s_cfd);
 #endif
     __atomic_store_n(&s_cfd, -1, __ATOMIC_RELAXED);
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
     s_inn = 0;
 #endif
     ESP_LOGI(TAG, "viewer left");
     if (s_cfg.on_viewer) s_cfg.on_viewer(false, s_cfg.user);
 }
 
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
 static void tcp_unpend(void) {
     s_pfd = -1;
     s_hn = 0;
@@ -907,7 +910,8 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     }
     if (s_task) return ESP_ERR_INVALID_STATE;
     if (config->button_count > 10 || (config->button_count && !config->buttons)) return ESP_ERR_INVALID_ARG;
-    if (!CONFIG_ESPMIRROR_WIFI && !espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
+    if (!CONFIG_ESPMIRROR_TCP && !espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
+    if (CONFIG_ESPMIRROR_USB_NETWORK && config->external_console) return ESP_ERR_INVALID_ARG;   /* the component owns TinyUSB */
     s_cfg = *config;
     /* The name as JSON needs it: a bounded copy, quotes and backslashes escaped, control characters out. */
     size_t at = 0;
@@ -978,9 +982,8 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #else
     bool audio_ok = true;
 #endif
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
     int fd = -1;
-    fd = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in sa = {.sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr.s_addr = htonl(INADDR_ANY)};
     int one = 1;
 #endif
@@ -990,17 +993,19 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         fail = "no memory for the screen copy";
         err = ESP_ERR_NO_MEM;
     }
-#if CONFIG_ESPMIRROR_WIFI
-    else if (fd < 0 || setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0
-               || bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(fd, 1) < 0) {
-        fail = "no TCP port";
-        err = ESP_FAIL;
-    }
-#endif
+    /* Before the socket: the USB network brings up the TCP/IP stack. */
     if (!fail && espmirror_usb_supported() && !config->external_console) {
         err = espmirror_usb_install();
         if (err != ESP_OK) fail = "USB driver unavailable";
     }
+#if CONFIG_ESPMIRROR_TCP
+    if (!fail && ((fd = socket(AF_INET, SOCK_STREAM, 0)) < 0
+                  || setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) < 0
+                  || bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0 || listen(fd, 1) < 0)) {
+        fail = "no TCP port";
+        err = ESP_FAIL;
+    }
+#endif
     if (!fail) {
         s_lock = lock;
         s_msg = msg;
@@ -1009,7 +1014,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         s_aud = aud;
         s_aud_out = aud_out;
 #endif
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
         s_listen = fd;
 #endif
         BaseType_t ok = CONFIG_ESPMIRROR_TASK_CORE >= 0
@@ -1021,7 +1026,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
             fail = "no task";
             err = ESP_ERR_NO_MEM;
             s_task = NULL;
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
             s_listen = -1;
 #endif
             s_msg = NULL;
@@ -1033,7 +1038,8 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #endif
         }
     }
-    if (!fail && espmirror_usb_supported() && !config->external_console && CONFIG_ESPMIRROR_USB_AUTO) {
+    if (!fail && espmirror_usb_supported() && !config->external_console
+        && (CONFIG_ESPMIRROR_USB_AUTO || CONFIG_ESPMIRROR_USB_NETWORK)) {
         if (xTaskCreate(console_task, "mirror_console", 4096, NULL, 3, NULL) != pdPASS) {
             vTaskDelete(s_task); s_task = NULL;
             fail = "no console task"; err = ESP_ERR_NO_MEM;
@@ -1041,7 +1047,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     }
     if (fail) {
         ESP_LOGE(TAG, "%s (errno %d): no live screen", fail, errno);
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
         if (fd >= 0) close(fd);
 #endif
         heap_caps_free(fb);
@@ -1062,7 +1068,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     }
     __atomic_store_n(&s_fb, fb, __ATOMIC_RELEASE);   /* the drawing side may call in from now on */
     __atomic_store_n(&s_ready, true, __ATOMIC_RELEASE);   /* and the task may serve */
-#if CONFIG_ESPMIRROR_WIFI
+#if CONFIG_ESPMIRROR_TCP
     esp_err_t mdns = mdns_init();
     if (mdns == ESP_OK) mdns_hostname_set("espmirror");
     if (mdns == ESP_OK || mdns == ESP_ERR_INVALID_STATE) {
@@ -1071,8 +1077,19 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         snprintf(address, sizeof(address), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         mdns_txt_item_t txt[] = {{"version", "2"}, {"width", width}, {"height", height}, {"mac", address}};
         mdns_service_add(s_name, "_musemirror", "_tcp", PORT, txt, 4);
+#if CONFIG_ESPMIRROR_USB_NETWORK
+        esp_netif_t *usb = espmirror_usb_netif();
+        if (mdns_register_netif(usb) == ESP_OK) {
+            mdns_netif_action(usb, MDNS_EVENT_ENABLE_IP4 | MDNS_EVENT_ANNOUNCE_IP4);
+        } else {
+            ESP_LOGW(TAG, "no mDNS slot for the USB network: raise CONFIG_MDNS_MAX_INTERFACES");
+        }
+#endif
     }
 #endif
     ESP_LOGI(TAG, "%s, %d x %d, port %d", s_name, s_w, s_h, PORT);
+#if CONFIG_ESPMIRROR_USB_NETWORK
+    ESP_LOGI(TAG, "USB network: the board is 192.168.%d.1", CONFIG_ESPMIRROR_USB_NETWORK_SUBNET);
+#endif
     return ESP_OK;
 }

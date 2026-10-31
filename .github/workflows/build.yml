@@ -25,6 +25,11 @@ jobs:
           - idf: "v6.0.1"
             example: virtual
             target: esp32s3
+          # Its own job: an include merges only into the original matrix combinations.
+          - idf: "v6.0.1"
+            example: virtual
+            target: esp32s3
+            defaults: "sdkconfig.defaults;sdkconfig.usbnet"
     steps:
       - uses: actions/checkout@v5
       - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
@@ -33,6 +38,7 @@ jobs:
           esp_idf_version: ${{ matrix.idf }}
           target: ${{ matrix.target }}
           path: examples/${{ matrix.example }}
+          command: idf.py ${{ matrix.defaults && format('-D SDKCONFIG_DEFAULTS="{0}"', matrix.defaults) || '' }} build
 
   viewer:
     runs-on: macos-latest

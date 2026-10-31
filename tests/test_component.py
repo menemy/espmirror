@@ -18,7 +18,7 @@ class ComponentTests(unittest.TestCase):
                 command = shlex.split(os.environ.get('CC', 'cc')) + [
                     '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsyntax-only',
                     '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
-                    '-I' + str(ROOT / 'src'), '-DCONFIG_ESPMIRROR_WIFI=%d' % wifi,
+                    '-I' + str(ROOT / 'src'), '-DCONFIG_ESPMIRROR_TCP=%d' % wifi,
                     '-DCONFIG_ESPMIRROR_AUDIO=%d' % audio, '-DCONFIG_ESPMIRROR_USB=%d' % usb,
                     '-DCONFIG_ESPMIRROR_DELTA=1', '-DCONFIG_ESPMIRROR_QOI=1',
                     str(ROOT / 'src/espmirror.c'), str(ROOT / 'src/espmirror_usb.c'),

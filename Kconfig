@@ -1,8 +1,37 @@
 menu "espmirror"
 
+    config ESPMIRROR_USB_NETWORK
+        bool "USB network and serial port over TinyUSB"
+        depends on SOC_USB_OTG_SUPPORTED
+        select ESPMIRROR_TCP
+        default n
+        help
+            The native USB port becomes a TinyUSB device with two interfaces,
+            both carrying the mirror: a serial port (CDC-ACM) and a network
+            (CDC-NCM) where the board is 192.168.N.1 and hands the computer an
+            address with no route. ESP-IDF's DHCP server still names the board
+            as the DNS server; the board answers no DNS queries. It selects
+            TCP, so the unauthenticated port also listens on any other network
+            the application brings up, Wi-Fi included.
+            Needs espressif/esp_tinyusb 2.4.0 or later in the application with
+            CONFIG_TINYUSB_CDC_ENABLED, CONFIG_TINYUSB_NET_MODE_NCM, a product
+            string containing "espmirror" (the viewer looks for it), an empty
+            serial string (it becomes the MAC) and CONFIG_MDNS_MAX_INTERFACES
+            raised to 4; examples/virtual/sdkconfig.usbnet has them all. The
+            USB Serial/JTAG console is gone while it runs: put the console on
+            UART and flash with BOOT held.
+
+    config ESPMIRROR_USB_NETWORK_SUBNET
+        int "Third byte of the USB network, 192.168.N.0/24"
+        depends on ESPMIRROR_USB_NETWORK
+        range 0 255
+        default 7
+        help
+            Two boards on one computer need different values.
+
     config ESPMIRROR_USB
         bool "USB Serial/JTAG mirror"
-        depends on SOC_USB_SERIAL_JTAG_SUPPORTED
+        depends on SOC_USB_SERIAL_JTAG_SUPPORTED && !ESPMIRROR_USB_NETWORK
         depends on !ESP_CONSOLE_UART_DEFAULT && !ESP_CONSOLE_UART_CUSTOM && !ESP_CONSOLE_USB_CDC
         default y
         help
@@ -17,9 +46,13 @@ menu "espmirror"
             Disable when the application reads the console itself. Set
             external_console in the config if it also installs the driver.
 
-    config ESPMIRROR_WIFI
+    config ESPMIRROR_TCP
         bool "TCP and mDNS mirror (no authentication)"
         default n
+        help
+            Binds to every address, so it listens on each network the
+            application brings up, such as Wi-Fi or the USB network. The
+            application starts Wi-Fi itself.
 
     config ESPMIRROR_DELTA
         bool "Try XOR delta rectangles"

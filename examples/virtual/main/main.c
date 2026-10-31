@@ -3,17 +3,24 @@
  */
 #include <assert.h>
 #include <stdint.h>
+#include <string.h>
 
+#include "sdkconfig.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#if CONFIG_VIRTUAL_WIFI
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "esp_wifi.h"
+#include "nvs_flash.h"
+#endif
 #include "espmirror.h"
 #include "espmirror_lvgl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "lvgl.h"
-#include "sdkconfig.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error "The virtual example uses the ESP32-S3 native USB port"
@@ -128,9 +135,52 @@ static void build_ui(void) {
     }
 }
 
+#if CONFIG_VIRTUAL_WIFI
+static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)data;
+    if (id == WIFI_EVENT_STA_START || id == WIFI_EVENT_STA_DISCONNECTED) esp_wifi_connect();
+}
+
+static void got_ip(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    (void)arg; (void)base; (void)id;
+    const ip_event_got_ip_t *event = data;
+    ESP_LOGI("virtual", "Wi-Fi: the board is " IPSTR, IP2STR(&event->ip_info.ip));
+}
+
+/* The mirror's TCP port opens on the stack this starts, before espmirror_start(). */
+static void net_init(void) {
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+}
+
+/* After espmirror_start(): the screen copy takes its contiguous block before Wi-Fi splits internal RAM. */
+static void wifi_start(void) {
+    esp_netif_create_default_wifi_sta();
+    const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&init));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, got_ip, NULL));
+    wifi_config_t config = { 0 };
+    strlcpy((char *)config.sta.ssid, CONFIG_VIRTUAL_WIFI_SSID, sizeof(config.sta.ssid));
+    strlcpy((char *)config.sta.password, CONFIG_VIRTUAL_WIFI_PASSWORD, sizeof(config.sta.password));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+}
+#endif
+
 void app_main(void) {
     s_keys = xQueueCreate(16, sizeof(int));
     assert(s_keys);
+#if CONFIG_VIRTUAL_WIFI
+    net_init();
+#endif
 #if CONFIG_VIRTUAL_BOOT_GPIO >= 0
     if (!GPIO_IS_VALID_GPIO(CONFIG_VIRTUAL_BOOT_GPIO)) {
         ESP_LOGE("virtual", "invalid BOOT GPIO");
@@ -158,6 +208,9 @@ void app_main(void) {
         .on_key = on_key,
     };
     ESP_ERROR_CHECK(espmirror_start(&config));
+#if CONFIG_VIRTUAL_WIFI
+    wifi_start();
+#endif
     lv_init();
     lv_tick_set_cb(tick_ms);
     lv_display_t *display = lv_display_create(W, H);
@@ -167,7 +220,7 @@ void app_main(void) {
     lv_display_set_flush_cb(display, flush);
     ESP_ERROR_CHECK(espmirror_attach_lvgl(display));
     build_ui();
-    ESP_LOGI("virtual", "USB mirror ready; swipe sideways for the list, BOOT or Tap counts presses");
+    ESP_LOGI("virtual", "mirror ready; swipe sideways for the list, BOOT or Tap counts presses");
     for (;;) {
         boot_poll(tick_ms());
         int key;

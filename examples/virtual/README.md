@@ -39,7 +39,10 @@ Logs appear in the viewer's terminal and in the optional log file.
 
 The default 240 by 240 screen uses a 115,200-byte mirror framebuffer and an
 11,520-byte partial LVGL draw buffer. It does not enable PSRAM; these defaults
-can use the S3's internal RAM. Larger screens, especially 466 by 466 or
+can use the S3's internal RAM. Measured on a XIAO ESP32S3 at 240 by 240 with
+USB and TCP: `espmirror_start()` takes 207 KB of internal RAM without PSRAM,
+which leaves Wi-Fi too little to start, and 55 KB with PSRAM, which runs
+Wi-Fi and the mirror together. Larger screens, especially 466 by 466 or
 640 by 640, need PSRAM enabled for the particular module under Component
 config, ESP PSRAM. The component prefers PSRAM when available. Enabling delta
 adds another width times height times two bytes. Allocation failure stops
@@ -55,9 +58,27 @@ The LVGL adapter consumes the mirror's queued press, movement and release
 edges. The flush callback only acknowledges the buffer after the mirror
 has copied it.
 
-TCP is disabled. Enabling CONFIG_ESPMIRROR_WIFI alone does not establish a
-network connection; applications wanting TCP must add their own network
-setup, as in the other examples. Audio and optional delta/QOI are off.
-CI builds this example on ESP-IDF 5.4 and 6.0.1 for ESP32-S3. Physical BOOT,
-USB line behavior, memory headroom and animation timing require hardware
-validation; host checks do not establish those properties.
+## Other transports
+
+The default is the USB Serial/JTAG port. Two more, alone or together:
+
+```sh
+# USB network: TinyUSB serial port plus a network on the same cable, the board at 192.168.7.1.
+# Remove an earlier sdkconfig first: its values win over the new defaults.
+rm -f sdkconfig
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usbnet" build
+# Wi-Fi: Component config > ESP PSRAM on, then Virtual display > Join a Wi-Fi network
+idf.py menuconfig
+```
+
+With the USB network the viewer still finds the board by itself, over its
+TinyUSB serial port; `python3 tools/espmirror.py 192.168.7.1` goes over the
+network instead. That build takes the port away from USB Serial/JTAG: hold
+BOOT while plugging in to flash it again, and the boot log is on the UART
+pins. With Wi-Fi the board logs its address; pass it to the viewer, or add
+`--wifi` for mDNS. Audio and optional delta/QOI are off.
+
+CI builds this example on ESP-IDF 5.4 and 6.0.1 for ESP32-S3, and the USB
+network build on 6.0.1. Physical BOOT, USB line behavior, memory headroom and
+animation timing require hardware validation; host checks do not establish
+those properties.

@@ -1,0 +1,13 @@
+# Copyright (c) 2026 Maksim Nagaev
+# SPDX-License-Identifier: Apache-2.0
+# The USB port as a TinyUSB serial port and network instead of USB Serial/JTAG:
+# rm -f sdkconfig; idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usbnet" build
+# An empty serial string is the MAC from esp_tinyusb 2.4.0 on; the viewer reads it.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESPMIRROR_USB_NETWORK=y
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_NET_MODE_NCM=y
+CONFIG_TINYUSB_DESC_PRODUCT_STRING="espmirror"
+CONFIG_TINYUSB_DESC_CDC_STRING="espmirror"
+CONFIG_TINYUSB_DESC_SERIAL_STRING=""
+CONFIG_MDNS_MAX_INTERFACES=4

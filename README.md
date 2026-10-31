@@ -3,7 +3,8 @@
 The screen of your ESP32 board on your desktop, live, drawn as the device it
 is: the body, the buttons, the LED. Click the buttons, hear what it plays,
 talk into its speaker, record a video, take a screenshot at the real size.
-An ESP-IDF component on the board, one Python window on the computer, a USB cable by default and optional TCP over Wi-Fi.
+An ESP-IDF component on the board, one Python window on the computer: a USB
+cable by default, a network over the same cable or Wi-Fi as options.
 
 <p align="center">
   <img src="docs/demo.gif" width="440" alt="The LVGL example on a Waveshare 1.54G devkit, mirrored on a Mac and drawn as the device: the keys light LEDs on screen, the on-screen buttons play sounds, the spectrogram scrolls, the board's LED on the body lights while a sound plays">
@@ -48,7 +49,7 @@ goes into the bug report.
 
 | | |
 |---|---|
-| Chip | native USB Serial/JTAG ESP32 (including S3); other targets can opt into TCP |
+| Chip | an ESP32 with native USB (Serial/JTAG, or USB OTG for the USB network; the S3 has both); any other ESP32 over TCP |
 | ESP-IDF | 5.1 or later; the LVGL hook needs LVGL 9.5 or later (from the registry: ESP-IDF 5.4 or later, whose component manager reads LVGL's manifest) |
 | RAM | the screen copy `width × height × 2` bytes, the message buffer (32 KB by default, 8 KB at least), 1 KB input, 16 KB for audio when on, 4 KB of task stack |
 | PSRAM | not required; used when present (`CONFIG_ESPMIRROR_PREFER_PSRAM`) |
@@ -59,9 +60,13 @@ Version 1 baseline RAM, excluding the v2 USB queue and optional delta reference:
 | Screen | Copy | With defaults (32 KB messages, audio) | Fits without PSRAM? |
 |---|---|---|---|
 | 128 × 128 | 32 KB | 85 KB | yes |
-| 240 × 240 | 113 KB | 166 KB | on an ESP32-S3 with Wi-Fi, usually; with 8 KB messages and no audio, 123 KB |
+| 240 × 240 | 113 KB | 166 KB | version 1 on an ESP32-S3 with Wi-Fi, usually (with 8 KB messages and no audio, 123 KB); version 2 with Wi-Fi needs PSRAM, below |
 | 320 × 240 | 150 KB | 203 KB | PSRAM |
 | 466 × 466 | 424 KB | 477 KB | PSRAM |
+
+Measured with version 2 on a XIAO ESP32S3 (`examples/virtual`, 240 × 240, USB
+and TCP, no audio): `espmirror_start()` takes 207 KB of internal RAM without
+PSRAM, too much for Wi-Fi to start as well, and 55 KB with PSRAM.
 
 Encoder cost depends on dirty area, selected codings, PSRAM and transport.
 Host tests do not establish target frame rates.
@@ -120,21 +125,49 @@ gives, `espmirror_audio_playback()` with what the speaker gets (both PCM16 at
 panel dims or sleeps. The viewer's own microphone comes back through
 `on_talk` and `on_talk_audio` in the config.
 
-## USB console ownership
+## Transports
 
-Select `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y` (or console NONE) and
-`CONFIG_ESPMIRROR_USB=y`. UART and USB OTG CDC consoles are not supported.
-The default `CONFIG_ESPMIRROR_USB_AUTO=y` installs the driver and reads complete
-`mirror` / `>mirror` commands. It does not interpret other console input.
-If your app installs the driver and reads the console, set `external_console`
-in the config and call `espmirror_serial_session()` after reading that line.
-Do not read the console concurrently with the session. ESP_LOG records remain
-visible between CRC-protected frames. `--log FILE` saves the host log.
+Three ways to the viewer; a board can have the cable and a network at once.
 
-TCP/mDNS requires `CONFIG_ESPMIRROR_WIFI=y`; the application establishes Wi-Fi.
-The port has **no authentication**. Anyone who can reach it can see the screen,
-press keys, listen and talk. Leave Wi-Fi off in deployed images unless the
-network and these capabilities are intentionally trusted.
+**USB serial** (the default). Select `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`
+(or console NONE) and `CONFIG_ESPMIRROR_USB=y`. UART and USB OTG CDC consoles
+are not supported. The default `CONFIG_ESPMIRROR_USB_AUTO=y` installs the
+driver and reads complete `mirror` / `>mirror` commands. It does not interpret
+other console input. If your app installs the driver and reads the console,
+set `external_console` in the config and call `espmirror_serial_session()`
+after reading that line. Do not read the console concurrently with the
+session. ESP_LOG records remain visible between CRC-protected frames.
+`--log FILE` saves the host log.
+
+**USB network** (`CONFIG_ESPMIRROR_USB_NETWORK=y`, chips with USB OTG such as
+the S3). The port becomes a TinyUSB device with a serial port and a network on
+one cable, both carrying the mirror. The viewer finds the board by itself on
+the serial port; the network takes `python3 tools/espmirror.py 192.168.7.1` or
+any other TCP client, at a similar rate. The board is `192.168.7.1`
+(`CONFIG_ESPMIRROR_USB_NETWORK_SUBNET` picks the 7; two boards on one computer
+need different values) and hands the computer an address with no route: a Mac
+kept its default route on its own network. ESP-IDF's DHCP server always names
+a DNS server, here the board, which answers no DNS queries; on Windows 11 that
+was reported to break name resolution while such a device is plugged in
+([esp-idf#19190](https://github.com/espressif/esp-idf/issues/19190)).
+Microsoft lists its CDC-NCM driver for Windows 11 and Windows Server 2022, not
+Windows 10. Tested on macOS with ESP-IDF 6.0.1 only.
+
+Add `espressif/esp_tinyusb` 2.4.0 or later to your app with
+`CONFIG_TINYUSB_CDC_ENABLED=y`, `CONFIG_TINYUSB_NET_MODE_NCM=y`, a product
+string containing `espmirror`, which the viewer looks for, and an empty serial
+string, which esp_tinyusb turns into the MAC; `examples/virtual/sdkconfig.usbnet`
+has the full list. It turns on TCP, so the port also listens on Wi-Fi if the
+app joins a network. USB Serial/JTAG is off the port while TinyUSB runs: flash
+with BOOT held, and read the boot log on the UART.
+
+**TCP** (`CONFIG_ESPMIRROR_TCP=y`, on port 7331 with mDNS) binds to every
+address, so it listens on each network the app brings up, such as Wi-Fi or the
+USB network. The app starts Wi-Fi itself. Existing configurations with the
+earlier name, `CONFIG_ESPMIRROR_WIFI`, keep TCP through `sdkconfig.rename`.
+The port has **no authentication**. Anyone who can reach it can
+see the screen, press keys, listen and talk. Leave TCP off in deployed images
+unless the network and these capabilities are intentionally trusted.
 
 Delta and QOI are off by default (`CONFIG_ESPMIRROR_DELTA`,
 `CONFIG_ESPMIRROR_QOI`). Delta requires another width*height*2 byte reference.

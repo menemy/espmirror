@@ -10,7 +10,7 @@ A board is reached on its USB console (a serial port, /dev/cu.usbmodem101 or
 COM5). Without arguments it opens only boards on USB Serial/JTAG ports.
 --wifi also discovers boards announcing _musemirror._tcp; a board found on
 both uses its cable. An explicit address connects over the network.
-Network viewing requires CONFIG_ESPMIRROR_WIFI=y on the board; it is off
+Network viewing requires CONFIG_ESPMIRROR_TCP=y on the board; it is off
 by default. Several boards share one window, side by side or in a grid.
 
 Each board is drawn at its real size from what it reports (the screen, round
@@ -395,7 +395,7 @@ def open_serial(port, wait=5.0, on_text=None):
             if time.monotonic() > end:
                 on_text(bytes(seen))
                 raise ConnectionError("No mirror reply on %s within %.1f s. Check that this is the board's USB Serial/JTAG port, "
-                                      "flash firmware built with CONFIG_ESPMIRROR_USB=y, and close idf.py monitor or other viewers." % (port, wait))
+                                      "flash firmware built with CONFIG_ESPMIRROR_USB=y or CONFIG_ESPMIRROR_USB_NETWORK=y, and close idf.py monitor or other viewers." % (port, wait))
             seen += ser.read(1)
             if seen.endswith(MARK):
                 on_text(bytes(seen[:-len(MARK)]))
@@ -416,8 +416,22 @@ def usb_boards():
     except ImportError:
         print("USB discovery needs pyserial: python3 -m pip install pyserial", file=sys.stderr)
         return []
-    return [(p.device, usb_serial_mac(p.serial_number)) for p in list_ports.comports()
-            if p.vid == 0x303a and p.pid == 0x1001]
+    return [(p.device, usb_serial_mac(p.serial_number)) for p in list_ports.comports() if is_board_port(p)]
+
+
+def is_board_port(port):
+    """USB Serial/JTAG, or a TinyUSB serial port that names itself espmirror (CONFIG_ESPMIRROR_USB_NETWORK).
+    Where the system gives no names (Windows), any TinyUSB serial port."""
+    if port.vid != 0x303a:
+        return False
+    if port.pid == 0x1001:
+        return True
+    names = (getattr(port, "product", None), getattr(port, "interface", None))
+    if names == (None, None):
+        # pyserial on Windows reports neither string, so every TinyUSB serial port is a candidate;
+        # one that is not a mirror never answers the handshake.
+        return 0x4000 <= (port.pid or 0) <= 0x40ff
+    return any("espmirror" in (name or "").lower() for name in names)
 
 
 def discover(seconds=2.5):

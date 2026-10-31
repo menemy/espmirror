@@ -36,4 +36,4 @@ docs/protocol.md and must document compatibility and update the protocol version
 
 Build basic and lvgl for `esp32s3` and `esp32`. CI checks those on ESP-IDF
 5.1, 5.4 and 6.0 (LVGL needs 5.4+), and virtual on `esp32s3` with 5.4 and
-6.0.1. The virtual example needs no network credentials or panel.
+6.0.1, plus its USB network variant on 6.0.1. The virtual example needs no network credentials or panel.
