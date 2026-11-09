@@ -22,8 +22,8 @@ fingers on a trackpad over it (pages slide, lists scroll), shown as a fading
 ring (View > Show touches); the drawn buttons, or the keys
 1 through 4 are the board's advertised keys, held as long as the mouse
 or key (or tapped on release for a tap-only profile); arrows, Enter and Esc drive boards with menu keys. The board
-under the mouse gets the keys. The body and the handle at the bottom left move
-the window, the one at the bottom right resizes it.
+under the mouse gets the keys. The body and the arrows button at the top move
+the window; any corner resizes it.
 
 Above the device: talk and listen (QtMultimedia), record, screenshot and
 close. Screenshots (each screen at its own pixels, and the devices as drawn,
@@ -898,7 +898,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
     from PySide6.QtWidgets import QApplication, QMenu, QMenuBar, QToolTip, QWidget
 
     BUTTON = 34                      # talk, listen, record, screenshot, close
-    GRIP = 16
+    CORNER = 14                      # points from a corner of the devices' area that resize the window
     GAP = 28                         # between boards side by side
     MIN_GLASS = 120                  # points: the screen is never drawn narrower, a tiny device is no use
     KEY_MM = 6.0                     # a button: .75 of this along the edge, .2 out of it
@@ -953,8 +953,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         q.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         return q
 
-    # -- device photos, scaled copies and shadows: cached, a resize rebuilds them -----------------------------
-    photo_cache, scaled_cache, shadow_cache = {}, {}, {}
+    # -- device photos and scaled copies: cached, a resize rebuilds them ---------------------------------------
+    photo_cache, scaled_cache = {}, {}
 
     def solid_inside(img):
         """The photo with whatever its cut-out left see-through inside the body (the glass's dark border,
@@ -1009,35 +1009,6 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             return out
         return bounded(scaled_cache, (img.cacheKey(), round(w * dpr), round(h * dpr)), make)
 
-    def box_blur(a, r):
-        for axis in (0, 1):
-            for _ in range(3):
-                pad = [(0, 0), (0, 0)]
-                pad[axis] = (r + 1, r)
-                c = np.cumsum(np.pad(a, pad), axis=axis, dtype=np.float32)
-                n = a.shape[axis]
-                a = (np.take(c, range(2 * r + 1, 2 * r + 1 + n), axis=axis) -
-                     np.take(c, range(0, n), axis=axis)) / (2 * r + 1)
-        return a
-
-    def shadow(key, w, h, blur, mask):
-        """The drop shadow of a shape (drawn by mask at its origin): black at .45, blurred; and its margin."""
-        def make():
-            pad = int(blur * 2) + 2
-            W, H = int(w) + 2 * pad + 2, int(h) + 2 * pad + 2
-            img = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
-            img.fill(0)
-            q = QPainter(img)
-            q.setRenderHint(AA)
-            q.translate(pad, pad)
-            mask(q)
-            q.end()
-            a = np.frombuffer(img.constBits(), np.uint8).reshape(H, img.bytesPerLine())[:, 3:W * 4:4]
-            a = box_blur(a.astype(np.float32), max(1, int(round(blur / 2))))
-            out = np.zeros((H, W, 4), np.uint8)
-            out[..., 3] = np.clip(a * .45, 0, 255).astype(np.uint8)
-            return QImage(out.tobytes(), W, H, W * 4, QImage.Format.Format_ARGB32_Premultiplied).copy(), pad
-        return bounded(shadow_cache, (key, round(w), round(h), round(blur, 1)), make)
 
     # -- the device's parts ---------------------------------------------------------------------------------
     def device_layout(look, s, ox, oy):
@@ -1254,19 +1225,11 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             p.restore()
 
     def paint_device(p, L, prof, img, pressed, veil, text, led_mode=0, labels=True):
-        """The device from a layout: the body with its finish and a drop shadow, the buttons, the glass, the screen."""
+        """The device from a layout: the body with its finish, the buttons, the glass, the screen."""
         style = FINISHES[prof["body"]["finish"]]
-        s = L["s"]
         bx, by, bw, bh = L["body"]
         dpr = p.device().devicePixelRatioF() if p.device() else 1.0
         photo = scaled_photo(L["photo"], bw, bh, dpr) if L["photo"] is not None else None
-        if photo is not None:
-            sh, pad = shadow(("photo", L["photo"].cacheKey()), bw, bh, 3 * s,
-                             lambda q: q.drawImage(QRectF(0, 0, bw, bh), photo))
-        else:
-            sh, pad = shadow(("body", round(L["body_r"], 1)), bw, bh, 3 * s,
-                             lambda q: q.fillPath(rounded((0, 0, bw, bh), L["body_r"]), QBrush(Qt.GlobalColor.black)))
-        p.drawImage(QPointF(bx - pad, by - pad + 1.2 * s), sh)
         for k in L["keys"]:                                   # the buttons sit behind the body's edge, so first
             pushed = k["role"] in pressed
             c1, c2 = style["key_down"] if pushed else style["key"]
@@ -1335,6 +1298,13 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.setPen(pen(ink, 1.5))
             p.drawArc(QRectF(cx - 6.5, cy - 2 - 6.5, 13, 13), 180 * 16, 180 * 16)
+        elif name == "move":                                  # four arrows from the middle
+            p.setPen(pen(ink, 1.5))
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                tip = QPointF(cx + dx * 8, cy + dy * 8)
+                p.drawLine(QPointF(cx, cy), tip)
+                for side in (1, -1):                          # the head: two short strokes back from the tip
+                    p.drawLine(tip, QPointF(tip.x() - dx * 3.5 + side * dy * 3, tip.y() - dy * 3.5 + side * dx * 3))
         elif name == "rec":
             if recording:
                 p.fillRect(QRectF(cx - 6, cy - 6, 12, 12), rgb(255, 255, 255))
@@ -1348,19 +1318,6 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             p.drawEllipse(QRectF(cx - 3.5, cy - 1.5, 7, 7))
             p.fillRect(QRectF(cx - 4, cy - 7, 8, 3), ink)
         p.restore()
-
-    def paint_handles(p, grip, move):
-        """Move on the left (four arrows), resize on the right (three lines)."""
-        p.setPen(pen(rgb(0x9a, 0x9a, 0xa0, .7), 1.2))
-        gx, gy = grip[0], grip[1]
-        for i in (0, 5, 10):
-            p.drawLine(QPointF(gx + GRIP, gy + i), QPointF(gx + i, gy + GRIP))
-        cx, cy, h = move[0] + GRIP / 2, move[1] + GRIP / 2, GRIP / 2
-        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            tip = QPointF(cx + dx * h, cy + dy * h)
-            p.drawLine(QPointF(cx, cy), tip)
-            for side in (1, -1):                              # the head: two short strokes back from the tip
-                p.drawLine(tip, QPointF(tip.x() - dx * 3.5 + side * dy * 3, tip.y() - dy * 3.5 + side * dx * 3))
 
     PLACEHOLDER = dict(name="", w=240, h=240, round=False, diag=0, touch=False, buttons=[])
 
@@ -1429,10 +1386,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
 
         def measure(self, ss):
             """The devices at their scales, in rows (up to three side by side, more in a grid), and the window
-            around them: a margin for the drop shadow, more above for the buttons, room for keys that stick out."""
+            around them: a thin margin, more above for the buttons, room for keys that stick out."""
             parts = [device_layout(d.look, s, 0, 0) for d, s in zip(self.devs, ss)]
-            k = max(L["active"][2] / d.look["w"] for L, d in zip(parts, self.devs))
-            m = max(24, 16 * k)
+            m = 4
             cells = [(L["over"][0] + L["body"][2] + L["over"][2], L["over"][1] + L["body"][3] + L["over"][3])
                      for L in parts]
             n = len(parts)
@@ -1442,8 +1398,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             row_h = [max(cells[i][1] for i in row) for row in rows]
             mt = max(m, BUTTON + 14)
             W = max(row_w) + 2 * m
-            W += max(0, 5 * (BUTTON + 6) + 8 - W)             # the five buttons at the top never shrink
-            return dict(W=W, H=mt + sum(row_h) + GAP * (len(rows) - 1) + m, mt=mt, parts=parts, cells=cells,
+            W += max(0, 6 * (BUTTON + 6) + 8 - W)             # the six buttons at the top never shrink
+            return dict(W=W, H=mt + sum(row_h) + GAP * (len(rows) - 1) + m, m=m, mt=mt, parts=parts, cells=cells,
                         rows=rows, row_w=row_w, row_h=row_h)
 
         def apply_zoom(self, zoom, say=True):
@@ -1463,7 +1419,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             self.zoom = min(self.ss) / self.px_mm()           # after the floor: Bigger acts at once
             g = self.measure(self.ss)
             self.lay = None
-            self.resize(int(math.ceil(g["W"])), int(math.ceil(g["H"])))
+            # Fixed: the system's edge drag would stretch the window off the devices' proportions; corners resize.
+            self.setFixedSize(int(math.ceil(g["W"])), int(math.ceil(g["H"])))
             if self.isVisible() and not self.grip:            # grown past the screen's edge: back onto it
                 area = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
                 x = max(area.left(), min(self.x(), area.right() + 1 - self.width()))
@@ -1502,10 +1459,15 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                     d.slot = QRectF(x - GAP / 2, y - GAP / 2, cw + GAP, rh + GAP)
                     x += cw + GAP
                 y += rh + GAP
-            x0 = (W - (5 * (BUTTON + 6) - 6)) / 2
+            x0 = (W - (6 * (BUTTON + 6) - 6)) / 2
+            # The corners of the drawn devices resize, as a window's own do.
+            bodies = [d.L["body"] for d in self.devs]
+            left, top = min(b[0] for b in bodies), min(b[1] for b in bodies)
+            right, bottom = max(b[0] + b[2] for b in bodies), max(b[1] + b[3] for b in bodies)
             self.lay = dict(buttons={name: (x0 + i * (BUTTON + 6), 4, BUTTON, BUTTON)
-                                     for i, name in enumerate(("talk", "listen", "rec", "shot", "close"))},
-                            grip=(W - GRIP - 5, H - GRIP - 5, GRIP, GRIP), move=(5, H - GRIP - 5, GRIP, GRIP))
+                                     for i, name in enumerate(("move", "talk", "listen", "rec", "shot", "close"))},
+                            corners=[((sx, sy), (left if sx < 0 else right, top if sy < 0 else bottom))
+                                     for sx in (-1, 1) for sy in (-1, 1)])
             return self.lay
 
         def resizeEvent(self, e):
@@ -1543,7 +1505,6 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 p.drawText(box.adjusted(8, 4, -8, -4), int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter), text)
             elif self.toast:
                 self.toast = None
-            paint_handles(p, lay["grip"], lay["move"])
             p.end()
 
         def paint_devices(self, p, now, flash):
@@ -1585,13 +1546,12 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 p.restore()
 
         def device_bounds(self):
-            """Where the devices are, their buttons and drop shadows included: (x0, y0, x1, y1)."""
+            """Where the devices are, their buttons included: (x0, y0, x1, y1)."""
             self.arrange()
             boxes = []
             for d in self.devs:
-                (bx, by, bw, bh), (left, top, right, bottom), s = d.L["body"], d.L["over"], d.L["s"]
-                m = 3 * s
-                boxes.append((bx - left - m, by - top - m, bx + bw + right + m, by + bh + bottom + m + 1.2 * s))
+                (bx, by, bw, bh), (left, top, right, bottom) = d.L["body"], d.L["over"]
+                boxes.append((bx - left, by - top, bx + bw + right, by + bh + bottom))
             return (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes),
                     max(b[3] for b in boxes))
 
@@ -1715,10 +1675,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             for name, (bx, by, bw, bh) in lay["buttons"].items():
                 if (x - bx - bw / 2) ** 2 + (y - by - bh / 2) ** 2 <= (bw / 2) ** 2:
                     return name, None, None
-            for name in ("grip", "move"):
-                gx, gy, gw, gh = lay[name]
-                if gx - 3 <= x <= gx + gw + 3 and gy - 3 <= y <= gy + gh + 3:
-                    return name, None, None
+            for side, (cx, cy) in lay["corners"]:                # any corner resizes, as a window's does
+                if abs(x - cx) <= CORNER and abs(y - cy) <= CORNER:
+                    return "corner", side, None
             for d in self.devs:
                 for k in d.L["keys"]:
                     if key_hit(k, pos):
@@ -1778,8 +1737,12 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 at = self.screen_xy(d, pos)
                 d.link.pointer(*at, True)
                 self.touch(d, *at)
-            elif what == "grip":
-                self.grip = (e.globalPosition().x(), self.zoom, self.width())
+            elif what == "corner":
+                at, corners = e.globalPosition(), dict(self.arrange()["corners"])
+                (x0, y0), (x1, y1) = corners[(-1, -1)], corners[(1, 1)]
+                ox, oy = corners[(-role[0], -role[1])]       # the opposite corner stays where it is on the desk
+                self.grip = dict(side=role, x0=at.x(), y0=at.y(), zoom=self.zoom, w=x1 - x0, h=y1 - y0,
+                                 anchor=(self.x() + ox, self.y() + oy))
             elif what in ("move", "body", "glass"):
                 self.start_move(e)
 
@@ -1790,15 +1753,22 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 self.finger.link.pointer(*at, True)
                 self.touch(self.finger, *at, every=.08)
             elif self.grip:
-                x0, z0, w0 = self.grip
-                self.apply_zoom(z0 * (w0 + e.globalPosition().x() - x0) / w0, say=False)
+                g, at = self.grip, e.globalPosition()
+                sx, sy = g["side"]
+                # Only the drag along the corner's diagonal counts; across it, nothing changes.
+                dx, dy = sx * (at.x() - g["x0"]), sy * (at.y() - g["y0"])
+                grow = 1 + (dx * g["w"] + dy * g["h"]) / (g["w"] ** 2 + g["h"] ** 2)
+                self.apply_zoom(g["zoom"] * grow, say=False)
+                ox, oy = dict(self.arrange()["corners"])[(-sx, -sy)]
+                self.move(round(g["anchor"][0] - ox), round(g["anchor"][1] - oy))
             elif self.drag_from is not None:
                 self.move(e.globalPosition().toPoint() - self.drag_from)
             elif not e.buttons():
                 what, _role, d = self.where(pos)
                 shape = (Qt.CursorShape.PointingHandCursor if what == "key" or what == "glass" and
                          (d.look["touch"] or d.link.taken) else Qt.CursorShape.OpenHandCursor if what == "move"
-                         else Qt.CursorShape.SizeFDiagCursor if what == "grip" else Qt.CursorShape.ArrowCursor)
+                         else (Qt.CursorShape.SizeFDiagCursor if _role[0] == _role[1] else Qt.CursorShape.SizeBDiagCursor)
+                         if what == "corner" else Qt.CursorShape.ArrowCursor)
                 if self.cursor().shape() != shape:
                     self.setCursor(shape)
 
@@ -1874,7 +1844,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         def event(self, e):
             if e.type() == QEvent.Type.ToolTip:
                 what = self.where(QPointF(e.pos()))[0]
-                tip = {"talk": "Toggle microphone to selected board", "listen": "Toggle selected board speaker audio",
+                tip = {"move": "Move the window (or drag a device)", "talk": "Toggle microphone to selected board", "listen": "Toggle selected board speaker audio",
                        "rec": "Record / Stop (%s)" % self.native("Ctrl+R"),
                        "shot": "Screenshot (%s)" % self.native("Ctrl+S"), "close": "Close"}.get(what)
                 if tip:

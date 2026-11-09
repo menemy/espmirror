@@ -11,7 +11,7 @@ enum { LV_COLOR_FORMAT_RGB565, LV_COLOR_FORMAT_RGB565_SWAPPED, LV_DISPLAY_RENDER
        LV_EVENT_FLUSH_START, LV_EVENT_CLICKED, LV_ANIM_OFF, LV_ANIM_REPEAT_INFINITE,
        LV_OPA_TRANSP, LV_OBJ_FLAG_SCROLLABLE, LV_DIR_LEFT, LV_DIR_RIGHT, LV_DIR_HOR,
        LV_ALIGN_TOP_MID, LV_ALIGN_CENTER, LV_ALIGN_BOTTOM_MID, LV_STATE_FOCUSED, LV_EVENT_READY,
-       LV_RESULT_OK };
+       LV_RESULT_OK, LV_ANIM_ON };
 #define LV_USE_TEXTAREA 1
 #define LV_USE_KEYBOARD 1
 typedef struct lv_timer lv_timer_t;
@@ -105,3 +105,5 @@ void lv_textarea_cursor_right(lv_obj_t *);
 lv_obj_t *lv_keyboard_create(lv_obj_t *);
 void lv_keyboard_set_textarea(lv_obj_t *, lv_obj_t *);
 lv_obj_t *lv_keyboard_get_textarea(const lv_obj_t *);
+lv_obj_t *lv_tileview_get_tile_active(lv_obj_t *);
+void lv_tileview_set_tile_by_index(lv_obj_t *, uint32_t, uint32_t, int);

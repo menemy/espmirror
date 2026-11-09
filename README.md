@@ -187,8 +187,8 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 # explicit network target: python tools/espmirror.py 192.168.1.42
 ```
 
-Drag by the body or the handle at the bottom left, resize by the one at
-the bottom right. The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
+Drag by the body or the arrows button at the top, resize by any corner.
+The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
 Mic (Cmd Shift L), Talk (Cmd K), Bigger, Smaller, Actual size (Cmd 0),
 Float on Top (Cmd T). Use Ctrl on Windows/Linux. The keys 1 through 4 press
 board buttons, with arrows/Enter/Escape for navigation; while a text field is

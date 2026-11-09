@@ -46,10 +46,10 @@ class VirtualTests(unittest.TestCase):
 #include "driver/gpio.h"
 #include "espmirror.h"
 static QueueHandle_t s_keys;
-static int level = 1, presses;
+static int level = 1, presses, last;
 int gpio_get_level(int gpio) { assert(gpio == 0); return level; }
 int xQueueSend(QueueHandle_t q, const void *data, int ticks) {
-    (void)q; assert(ticks == 0); assert(*(const int *)data == ESPMIRROR_KEY_MAIN);
+    (void)q; assert(ticks == 0); last = *(const int *)data;
     presses++; return pdTRUE;
 }
 ''' + functions + '''
@@ -62,10 +62,11 @@ int main(void) {
     level = 1; boot_poll(101); boot_poll(131);
     level = 0; boot_poll(140); boot_poll(170); assert(presses == 2);
     level = 1; boot_poll(200); boot_poll(230);
-    level = 0; boot_poll(UINT32_MAX - 10); boot_poll(20); assert(presses == 3);
-    on_key(ESPMIRROR_KEY_AUX, true, NULL);
-    on_key(ESPMIRROR_KEY_MAIN, false, NULL); assert(presses == 3);
-    on_key(ESPMIRROR_KEY_MAIN, true, NULL); assert(presses == 4);
+    level = 0; boot_poll(UINT32_MAX - 10); boot_poll(20); assert(presses == 3 && last == ESPMIRROR_KEY_MAIN);
+    on_key(ESPMIRROR_KEY_AUX, true, NULL); assert(presses == 4 && last == ESPMIRROR_KEY_AUX);
+    on_key(ESPMIRROR_KEY_POWER, false, NULL);
+    on_key(ESPMIRROR_KEY_MAIN, false, NULL); assert(presses == 4);
+    on_key(ESPMIRROR_KEY_POWER, true, NULL); assert(presses == 5 && last == ESPMIRROR_KEY_POWER);
     return 0;
 }
 '''

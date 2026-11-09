@@ -7,8 +7,21 @@ input. No panel, codec or Wi-Fi setup. The first page has an animated bar
 and a counter. Swipe left to a scrolling list, and again to a text field
 with LVGL's keyboard: tap the field and type on the computer, or on the
 keyboard on the screen. Enter moves the line under the field.
-Tap a button, press BOOT on the module, or click the viewer's BOOT key to
-increment the counter. The keyboard's 2 key does the same.
+
+The viewer draws three keys laid out as the ESP-Mosaico's: two either side
+of the middle of the bottom edge, here BOOT and POWER, and FN at one o'clock. Tap the
+on-screen button, press BOOT on the module, or click the viewer's BOOT key to
+increment the counter; the keyboard's 2 key does the same. POWER (3) darkens
+the screen and brings it back, FN (1) turns to the next page. Only BOOT is
+also a key on the module; the other two exist in the viewer alone.
+
+For the ESP-Mosaico's screen, 480 by 480 at 2.16 inches, build with
+`sdkconfig.mosaico` (it turns on PSRAM):
+
+```sh
+rm -f sdkconfig
+idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.mosaico" build
+```
 
 Use the XIAO ESP32S3's USB connector. On the ESP32-S3-DevKitC-1 N8R8, use
 the connector marked USB, connected directly to the S3, not the UART bridge.
@@ -81,6 +94,6 @@ pins. With Wi-Fi the board logs its address; pass it to the viewer, or add
 `--wifi` for mDNS. Audio and optional delta/QOI are off.
 
 CI builds this example on ESP-IDF 5.4 and 6.0.1 for ESP32-S3, and the USB
-network build on 6.0.1. Physical BOOT, USB line behavior, memory headroom and
+network and ESP-Mosaico screen builds on 6.0.1. Physical BOOT, USB line behavior, memory headroom and
 animation timing require hardware validation; host checks do not establish
 those properties.

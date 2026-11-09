@@ -30,6 +30,10 @@ jobs:
             example: virtual
             target: esp32s3
             defaults: "sdkconfig.defaults;sdkconfig.usbnet"
+          - idf: "v6.0.1"
+            example: virtual
+            target: esp32s3
+            defaults: "sdkconfig.defaults;sdkconfig.mosaico"
     steps:
       - uses: actions/checkout@v5
       - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}

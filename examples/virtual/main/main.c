@@ -30,7 +30,7 @@
 #define H CONFIG_VIRTUAL_HEIGHT
 
 static QueueHandle_t s_keys;
-static lv_obj_t *s_pages, *s_count, *s_typed;
+static lv_obj_t *s_pages, *s_tiles[3], *s_count, *s_typed;
 static unsigned s_presses;
 static uint8_t s_draw[W * 24 * 2] __attribute__((aligned(LV_DRAW_BUF_ALIGN)));
 
@@ -41,7 +41,7 @@ static uint32_t tick_ms(void) {
 static void on_key(int key, bool down, void *user) {
     (void)user;
     /* The mirror task never calls LVGL. Only presses need to cross tasks. */
-    if (key == ESPMIRROR_KEY_MAIN && down) xQueueSend(s_keys, &key, 0);
+    if (down) xQueueSend(s_keys, &key, 0);
 }
 
 static void boot_poll(uint32_t now) {
@@ -71,6 +71,27 @@ static void count_press(void) {
     espmirror_set_led(s_presses % 2 ? ESPMIRROR_LED_ON : ESPMIRROR_LED_OFF);
 }
 
+/* POWER: the screen goes dark in the viewer and comes back. */
+static void power_press(void) {
+    static bool dark;
+    dark = !dark;
+    espmirror_set_screen_state(dark ? ESPMIRROR_SCREEN_DARK : ESPMIRROR_SCREEN_BRIGHT);
+}
+
+/* FN: the next page, round to the first. */
+static void next_page(void) {
+    lv_obj_t *active = lv_tileview_get_tile_active(s_pages);
+    unsigned i = 0;
+    while (i < 3 && s_tiles[i] != active) i++;
+    lv_tileview_set_tile_by_index(s_pages, (i + 1) % 3, 0, LV_ANIM_ON);
+}
+
+static void key_press(int key) {
+    if (key == ESPMIRROR_KEY_MAIN) count_press();
+    else if (key == ESPMIRROR_KEY_POWER) power_press();
+    else if (key == ESPMIRROR_KEY_AUX) next_page();
+}
+
 static void clicked(lv_event_t *event) {
     (void)event;
     count_press();
@@ -96,9 +117,9 @@ static void build_ui(void) {
     s_pages = lv_tileview_create(screen);
     lv_obj_set_size(s_pages, W, H);
     lv_obj_set_style_bg_opa(s_pages, LV_OPA_TRANSP, 0);
-    lv_obj_t *home = lv_tileview_add_tile(s_pages, 0, 0, LV_DIR_RIGHT);
-    lv_obj_t *page = lv_tileview_add_tile(s_pages, 1, 0, LV_DIR_HOR);
-    lv_obj_t *typing = lv_tileview_add_tile(s_pages, 2, 0, LV_DIR_LEFT);
+    lv_obj_t *home = s_tiles[0] = lv_tileview_add_tile(s_pages, 0, 0, LV_DIR_RIGHT);
+    lv_obj_t *page = s_tiles[1] = lv_tileview_add_tile(s_pages, 1, 0, LV_DIR_HOR);
+    lv_obj_t *typing = s_tiles[2] = lv_tileview_add_tile(s_pages, 2, 0, LV_DIR_LEFT);
     lv_obj_remove_flag(home, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(typing, LV_OBJ_FLAG_SCROLLABLE);
@@ -219,7 +240,13 @@ void app_main(void) {
     };
     ESP_ERROR_CHECK(gpio_config(&input));
 #endif
-    const espmirror_button_t boot = { .role = ESPMIRROR_KEY_MAIN, .name = "BOOT", .x = -1, .y = -1 };
+    /* Keys the viewer draws, laid out as the ESP-Mosaico's: two either side of the middle of the bottom
+     * edge, where its USB port is, and one at one o'clock. Only BOOT is also a key on the module. */
+    const espmirror_button_t keys[] = {
+        { .role = ESPMIRROR_KEY_MAIN, .name = "BOOT", .x = W / 2 - W / 5, .y = H - 1 },
+        { .role = ESPMIRROR_KEY_POWER, .name = "POWER", .x = W / 2 + W / 5, .y = H - 1 },
+        { .role = ESPMIRROR_KEY_AUX, .name = "FN", .x = W * 4 / 5, .y = 0 },
+    };
     const espmirror_config_t config = {
         .name = CONFIG_VIRTUAL_NAME,
         .width = W, .height = H,
@@ -228,7 +255,7 @@ void app_main(void) {
 #endif
         .diagonal = CONFIG_VIRTUAL_DIAGONAL_100 / 100.0f,
         .touch = true,
-        .buttons = &boot, .button_count = 1,
+        .buttons = keys, .button_count = 3,
         .on_key = on_key,
     };
     ESP_ERROR_CHECK(espmirror_start(&config));
@@ -244,11 +271,11 @@ void app_main(void) {
     lv_display_set_flush_cb(display, flush);
     ESP_ERROR_CHECK(espmirror_attach_lvgl(display));
     build_ui();
-    ESP_LOGI("virtual", "mirror ready; swipe sideways for a list and a text field, BOOT or Tap counts presses");
+    ESP_LOGI("virtual", "mirror ready; swipe or FN for the pages, BOOT or Tap counts presses, POWER darkens");
     for (;;) {
         boot_poll(tick_ms());
         int key;
-        while (xQueueReceive(s_keys, &key, 0) == pdTRUE) count_press();
+        while (xQueueReceive(s_keys, &key, 0) == pdTRUE) key_press(key);
         uint32_t delay = lv_timer_handler();
         if (delay > 10) delay = 10;
         TickType_t ticks = pdMS_TO_TICKS(delay);
