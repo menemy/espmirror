@@ -200,7 +200,8 @@ def board_look(info):
     if prof is GENERIC and info.get("round"):
         prof = GENERIC_ROUND
     return dict(name=info.get("name") or "", w=w, h=h, round=bool(info.get("round")),
-                ppi=math.hypot(w, h) / diag if diag > 0 else 0, touch=bool(info.get("touch")),
+                ppi=(min(w, h) if info.get("round") else math.hypot(w, h)) / diag if diag > 0 else 0,
+                touch=bool(info.get("touch")),
                 buttons=[b for b in info.get("buttons") or [] if isinstance(b, dict) and 1 <= b.get("role", 0) <= 10],
                 profile=turned(prof, w, h))
 

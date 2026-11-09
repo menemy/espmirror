@@ -78,7 +78,7 @@ typedef struct {
     void *user;
 
     bool round;
-    float diagonal;         /* inches; 0 derives it from ppi */
+    float diagonal;         /* inches, diameter for round screens; 0 derives it from ppi */
     bool touch;
     bool keyboard;
     const espmirror_button_t *buttons; /* copied at start; at most 10 */

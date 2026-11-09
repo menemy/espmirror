@@ -7,7 +7,7 @@ An ESP-IDF component on the board, one Python window on the computer: a USB
 cable by default, a network over the same cable or Wi-Fi as options.
 
 <p align="center">
-  <img src="docs/demo.gif" width="440" alt="The LVGL example on a Waveshare 1.54G devkit, mirrored on a Mac and drawn as the device: the keys light LEDs on screen, the on-screen buttons play sounds, the spectrogram scrolls, the board's LED on the body lights while a sound plays">
+  <img src="docs/demo.gif" width="440" alt="The LVGL example on an XOrigin AIPI Lite, mirrored on a Mac and drawn as the device: the keys light LEDs on screen, the on-screen buttons play sounds, the spectrogram scrolls, the board's LED on the body lights while a sound plays">
 </p>
 
 That is `examples/lvgl` on an XOrigin AIPI Lite. The viewer's keyboard
@@ -196,8 +196,9 @@ Its optional panel build drives CO5300, CST9220, FN and BOOT.
 
 Delta and QOI are off by default (`CONFIG_ESPMIRROR_DELTA`,
 `CONFIG_ESPMIRROR_QOI`). Delta requires another width*height*2 byte reference.
-USB input queues add about 33 KiB with audio-sized messages, beyond v1 memory
-figures below. Measure actual allocation and frame timing on your board.
+The USB input queue stores 2,112 bytes without audio or 20,608 bytes with
+audio, plus FreeRTOS queue overhead. Measure actual allocation and frame
+timing on your board.
 
 ## The viewer
 
@@ -343,10 +344,14 @@ both discovery and the saved target list. Headless `--list`, `--stats` and
   mouse presses, LEDs for the keys, three small sounds synthesised on the
   board, a spectrogram, the board's LED. On a board the example knows
   (`menuconfig` → espmirror example → The board) it drives the board's own
-  panel, speaker, microphone and buttons too: the XOrigin AIPI Lite today
-  (ST7789, ES8311, two buttons). On any other devkit the mirror is the only
-  display and the sounds play on the viewer; the board file is one C file to
-  add for yours.
+  panel, speaker, microphone and buttons too. Board implementations include
+  XOrigin AIPI Lite, Waveshare AMOLED 2.16 and 1.75C, LCD 3.49 V2, and e-Paper
+  1.54G. See its [README](examples/lvgl/README.md) for capabilities, build
+  overlays and hardware validation status. On a generic devkit the mirror
+  supplies the display and audio output.
+- [`examples/mosaico`](examples/mosaico): ESP32-S31 with ESP-Iris, a
+  mirror-only default and an optional physical panel/touch/key build. Requires
+  the matching preview toolchain and Vibe Mode partition layout.
 
 ```sh
 cd examples/basic

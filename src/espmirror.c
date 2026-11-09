@@ -1176,14 +1176,15 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     s_name[at] = 0;
     s_w = config->width;
     s_h = config->height;
+    bool is_round = config->round || config->corner_radius * 2 >= (s_w < s_h ? s_w : s_h);
     float diagonal = config->diagonal > 0 ? config->diagonal
-        : config->ppi > 0 ? hypotf(s_w, s_h) / config->ppi : 0;
+        : config->ppi > 0 ? (is_round ? (s_w < s_h ? s_w : s_h) : hypotf(s_w, s_h)) / config->ppi : 0;
     s_board_len = snprintf(s_board, sizeof(s_board),
         "B{\"version\":2,\"name\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
         "\"w\":%d,\"h\":%d,\"round\":%s,\"diag\":%.3f,\"touch\":%s,\"keyboard\":%s,"
         "\"audio\":%s,\"buttons\":[",
         s_name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_w, s_h,
-        (config->round || config->corner_radius * 2 >= (s_w < s_h ? s_w : s_h)) ? "true" : "false",
+        is_round ? "true" : "false",
         (double)diagonal, (config->touch || config->on_pointer) ? "true" : "false",
         config->keyboard ? "true" : "false", CONFIG_ESPMIRROR_AUDIO ? "true" : "false");
     for (size_t i = 0; i < (config->button_count ? config->button_count : 3); i++) {

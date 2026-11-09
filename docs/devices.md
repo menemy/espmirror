@@ -43,7 +43,8 @@ A round body: `body=dict(shape="round", d=55.0, finish="silver")`, keys with
 
 The screen's pixel size and corner radius come from the board (`width`,
 `height`, `corner_radius` in `espmirror_config_t`); `diagonal` (inches), or the older `ppi`, lets View > Actual
-size show the device at its real size.
+size show the device at its real size. For a round screen, `diagonal` is its
+active diameter; for a rectangular screen it is the corner-to-corner diagonal.
 
 ## Looking at a profile without the board
 

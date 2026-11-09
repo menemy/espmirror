@@ -140,7 +140,10 @@ requires explicit take-back. Host writers cannot outlive their session.
  "buttons":[{"role":2,"name":"BOOT","x":-1,"y":-1}]}
 ```
 
-Required geometry is `w`, `h`. `name`, `mac`, `round`, `diag` (inches), `touch`,
+Required geometry is `w`, `h`. `diag` is in inches: the diameter for a round
+screen, the diagonal otherwise. When deriving it from `ppi`, firmware uses
+`min(w,h)/ppi` for round screens and `hypot(w,h)/ppi` otherwise.
+`name`, `mac`, `round`, `diag`, `touch`,
 `keyboard`, and `buttons` share Muse's flat layout. `version` and `audio` are
 optional additions; absent audio means unavailable. `(-1,-1)` has no position
 hint. Keys 1..10 are passed unchanged to callbacks. Labels identify board
