@@ -79,6 +79,14 @@ menu "espmirror"
         default n
 
 
+    config ESPMIRROR_TIMING
+        bool "Collect bounded frame and transport timing counters"
+        default n
+        help
+            Keep eight cumulative timing records (320 bytes), with no allocations
+            or per-frame logging. ESP-Iris exposes a read-only snapshot at service
+            0x4553, method 4. The Mosaico example also records panel DMA waits.
+
     config ESPMIRROR_PORT
         int "TCP port the viewer connects to"
         range 1 65535

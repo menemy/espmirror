@@ -7,6 +7,7 @@
 
 #include "sdkconfig.h"
 #include "espmirror.h"
+#include "espmirror_timing.h"
 #include "espmirror_core.h"
 #include "espmirror_usb.h"
 #include <math.h>
@@ -260,7 +261,10 @@ static bool clip(int x, int y, int width, int height, int *x1, int *y1, int *x2,
 void espmirror_frame_end(int x, int y, int width, int height) {
     if (!__atomic_load_n(&s_fb, __ATOMIC_ACQUIRE)) return;
     int x1, y1, x2, y2;
-    if (clip(x, y, width, height, &x1, &y1, &x2, &y2)) espmirror_core_dirty(&s_core, x1, y1, x2, y2);
+    if (clip(x, y, width, height, &x1, &y1, &x2, &y2)) {
+        espmirror_core_dirty(&s_core, x1, y1, x2, y2);
+        espmirror_timing_record(ESPMIRROR_TIMING_FRAME_READY, espmirror_timing_now(), 0);
+    }
     xSemaphoreGive(s_lock);
 }
 
@@ -962,6 +966,7 @@ static void console_task(void *arg) {
 #define IRIS_KEY_METHOD 1
 #define IRIS_BOARD_METHOD 2
 #define IRIS_STREAM_METHOD 3
+#define IRIS_TIMING_METHOD 4
 #define IRIS_FORMAT 0x4553
 #define IRIS_CHUNK_HEADER 20
 typedef struct {
@@ -974,6 +979,9 @@ static unsigned s_iris_seen;
 static bool s_iris_input_owned;
 static bool s_iris_screen_registered, s_iris_pointer_registered, s_iris_key_registered, s_iris_board_registered;
 static bool s_iris_stream_registered, s_iris_image_seen;
+#if CONFIG_ESPMIRROR_TIMING
+static bool s_iris_timing_registered;
+#endif
 /* The mirror task owns the encoded buffer until the exact chunk ACK arrives. */
 static uint32_t s_iris_epoch, s_iris_message;
 static size_t s_iris_length, s_iris_offset, s_iris_ack;
@@ -1093,6 +1101,18 @@ static esp_err_t iris_board_rpc(const esp_iris_rpc_request_t *request, uint8_t *
     return ESP_OK;
 }
 
+#if CONFIG_ESPMIRROR_TIMING
+static esp_err_t iris_timing_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
+                                 size_t capacity, size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    if (!request || request->payload_size) return ESP_ERR_INVALID_ARG;
+    *size = espmirror_timing_read(response, capacity);
+    return *size ? ESP_OK : ESP_ERR_INVALID_ARG;
+}
+#endif
+
 static esp_err_t iris_stream_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
                                  size_t capacity, size_t *size, void *ctx) {
     (void)ctx;
@@ -1146,10 +1166,15 @@ static void iris_stream_pump(void) {
     }
     if (!s_iris_length) {
         if (now - s_iris_frame_us < FRAME_MS * 1000LL) return;
+        uint64_t wait_start = espmirror_timing_now();
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        uint64_t build_start = espmirror_timing_now();
         if (espmirror_core_pending(&s_core) || now - s_iris_frame_us >= BEAT_MS * 1000LL) {
             s_iris_length = espmirror_core_build(&s_core, s_fb, s_msg + IRIS_CHUNK_HEADER,
                                                MSG_MAX - IRIS_CHUNK_HEADER, s_state);
+            uint64_t built = espmirror_timing_now();
+            espmirror_timing_record(ESPMIRROR_TIMING_ENCODER_WAIT, build_start, build_start - wait_start);
+            espmirror_timing_record(ESPMIRROR_TIMING_ENCODER_BUILD, built, built - build_start);
         }
         xSemaphoreGive(s_lock);
         if (!s_iris_length) return;
@@ -1167,12 +1192,15 @@ static void iris_stream_pump(void) {
     iris_put32(p + 16, s_iris_length);
     uint16_t flags = (!s_iris_offset ? 1 : 0) | (s_iris_offset + n == s_iris_length ? 2 : 0);
     esp_iris_media_desc_t desc = { .width = s_w, .height = s_h, .format = IRIS_FORMAT, .quality = 1 };
+    uint64_t publish_start = espmirror_timing_now();
     if (esp_iris_media_submit(ESP_IRIS_CHANNEL_IMAGE, &desc, s_iris_message, flags,
                               p, n + IRIS_CHUNK_HEADER) != ESP_OK) {
         iris_release();
         iris_stream_clear();
         return;
     }
+    uint64_t published = espmirror_timing_now();
+    espmirror_timing_record(ESPMIRROR_TIMING_CHUNK_PUBLISH, published, published - publish_start);
     s_iris_ack = s_iris_offset + n;
     s_iris_sent_us = now;
 }
@@ -1202,6 +1230,10 @@ static void iris_pump(void) {
 }
 
 static void iris_unregister(void) {
+#if CONFIG_ESPMIRROR_TIMING
+    if (s_iris_timing_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_TIMING_METHOD);
+    s_iris_timing_registered = false;
+#endif
     if (s_iris_stream_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_STREAM_METHOD);
     if (s_iris_board_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_BOARD_METHOD);
     if (s_iris_key_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_KEY_METHOD);
@@ -1228,7 +1260,12 @@ static esp_err_t iris_register(void) {
     if (err != ESP_OK) return err;
     s_iris_board_registered = true;
     err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_STREAM_METHOD, iris_stream_rpc, &s_cfg);
-    if (err == ESP_OK) s_iris_stream_registered = true;
+    if (err != ESP_OK) return err;
+    s_iris_stream_registered = true;
+#if CONFIG_ESPMIRROR_TIMING
+    err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_TIMING_METHOD, iris_timing_rpc, &s_cfg);
+    if (err == ESP_OK) s_iris_timing_registered = true;
+#endif
     return err;
 }
 #endif

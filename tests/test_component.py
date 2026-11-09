@@ -23,9 +23,10 @@ class ComponentTests(unittest.TestCase):
             exe = folder / 'iris'
             command = shlex.split(os.environ.get('CC', 'cc')) + [
                 '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                '-DCONFIG_ESPMIRROR_TIMING=1',
                 '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
                 '-I' + str(folder), '-I' + str(ROOT / 'src'), str(ROOT / 'tests/espmirror_iris_harness.c'),
-                str(ROOT / 'src/espmirror_core.c'), '-o', str(exe)]
+                str(ROOT / 'src/espmirror_core.c'), str(ROOT / 'src/espmirror_timing.c'), '-o', str(exe)]
             result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, 'TMPDIR': tmp})
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([exe], capture_output=True, text=True)
@@ -40,11 +41,12 @@ class ComponentTests(unittest.TestCase):
                     '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
                     '-I' + str(ROOT / 'src'), '-DCONFIG_ESPMIRROR_TCP=%d' % wifi,
                     '-DCONFIG_ESPMIRROR_AUDIO=%d' % audio, '-DCONFIG_ESPMIRROR_USB=%d' % usb,
+                    '-DCONFIG_ESPMIRROR_TIMING=%d' % iris,
                     '-DCONFIG_ESPMIRROR_IRIS=%d' % iris, '-DCONFIG_ESP_IRIS_MEDIA_LATEST_BYTES=4096',
                     '-DCONFIG_ESP_IRIS_RPC_BODY_BYTES=2048',
                     '-DCONFIG_ESPMIRROR_DELTA=1', '-DCONFIG_ESPMIRROR_QOI=1',
                     str(ROOT / 'src/espmirror.c'), str(ROOT / 'src/espmirror_usb.c'),
-                    str(ROOT / 'src/espmirror_lvgl.c')]
+                    str(ROOT / 'src/espmirror_lvgl.c'), str(ROOT / 'src/espmirror_timing.c')]
                 result = subprocess.run(command, capture_output=True, text=True,
                                         env={**os.environ, 'TMPDIR': tmp})
                 self.assertEqual(result.returncode, 0, result.stderr)

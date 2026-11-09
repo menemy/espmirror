@@ -16,6 +16,7 @@
 #include "esp_lcd_touch_cst9220.h"
 #include "esp_timer.h"
 #include "espmirror.h"
+#include "espmirror_timing.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -28,6 +29,10 @@ static esp_lcd_panel_handle_t panel;
 static esp_lcd_touch_handle_t touch;
 static SemaphoreHandle_t transmitted;
 static uint16_t *band;
+#if CONFIG_ESPMIRROR_TIMING
+/* One DMA transfer is outstanding; its semaphore publishes this ISR timestamp. */
+static volatile uint64_t band_done_us;
+#endif
 
 /* CO5300 vendor initialization for the Mosaico's 480 x 480 panel. */
 static const co5300_lcd_init_cmd_t commands[] = {
@@ -48,8 +53,14 @@ static const co5300_lcd_init_cmd_t commands[] = {
 
 static bool transfer_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event, void *ctx) {
     (void)io; (void)event; (void)ctx;
+#if CONFIG_ESPMIRROR_TIMING
+    band_done_us = espmirror_timing_now();
+    espmirror_timing_record(ESPMIRROR_TIMING_BAND_DONE, band_done_us, 0);
+#endif
     BaseType_t wake = pdFALSE;
     xSemaphoreGiveFromISR(transmitted, &wake);
+    /* The pinned SPI panel driver ignores the callback's return value. */
+    if (wake == pdTRUE) portYIELD_FROM_ISR();
     return wake == pdTRUE;
 }
 
@@ -109,14 +120,23 @@ esp_err_t mosaico_board_present(bool on) {
         was_on = on;
     }
     if (!on) return ESP_OK;
+    uint64_t present_start = espmirror_timing_now();
     for (int y = 0; y < HEIGHT; y += BAND_ROWS) {
         const uint16_t *fb = espmirror_frame_begin();
         for (int i = 0; i < WIDTH * BAND_ROWS; i++) band[i] = __builtin_bswap16(fb[y * WIDTH + i]);
         espmirror_frame_end(0, 0, 0, 0);
         ESP_RETURN_ON_ERROR(esp_lcd_panel_draw_bitmap(panel, 0, y, WIDTH, y + BAND_ROWS, band), TAG, "panel draw");
         /* The DMA buffer is reused only after the SPI completion callback. */
+        uint64_t wait_start = espmirror_timing_now();
         if (xSemaphoreTake(transmitted, pdMS_TO_TICKS(500)) != pdTRUE) return ESP_ERR_TIMEOUT;
+        uint64_t awake = espmirror_timing_now();
+#if CONFIG_ESPMIRROR_TIMING
+        espmirror_timing_record(ESPMIRROR_TIMING_BAND_WAKE, awake, awake - band_done_us);
+#endif
+        espmirror_timing_record(ESPMIRROR_TIMING_BAND_WAIT, awake, awake - wait_start);
     }
+    uint64_t presented = espmirror_timing_now();
+    espmirror_timing_record(ESPMIRROR_TIMING_PANEL_PRESENT, presented, presented - present_start);
     return ESP_OK;
 }
 

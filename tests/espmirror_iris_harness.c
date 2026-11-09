@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include "espmirror_core.h"
 #include "espmirror.h"
+#include "espmirror_timing.h"
 #include "esp_iris.h"
 #include "esp_iris_service_profiles.h"
 #define PTR_Q 32
@@ -40,7 +41,7 @@ static int locks, inputs, releases, pointer_releases, fail_registration, registr
 static uint8_t last_input[5];
 static size_t last_length;
 static esp_iris_screen_backend_t screen;
-static esp_iris_rpc_handler_t pointer_handler, key_handler, board_handler, stream_handler;
+static esp_iris_rpc_handler_t pointer_handler, key_handler, board_handler, stream_handler, timing_handler;
 static bool viewer_on(void) { return cable; }
 bool esp_iris_media_is_streaming(int channel) { assert(channel == 3 || channel == 4); return channel == 3 ? streaming : image_streaming; }
 int xSemaphoreTake(SemaphoreHandle_t lock, int ticks) {
@@ -66,18 +67,19 @@ esp_err_t esp_iris_screen_unregister(void *ctx) {
     assert(screen.user_ctx == ctx); memset(&screen, 0, sizeof(screen)); return ESP_OK;
 }
 esp_err_t esp_iris_rpc_register(uint16_t service, uint16_t method, esp_iris_rpc_handler_t handler, void *ctx) {
-    assert((method >= 1 && method <= 3) && ctx == &s_cfg);
+    assert((method >= 1 && method <= 4) && ctx == &s_cfg);
     if (++registrations == fail_registration) return ESP_FAIL;
     if (service == 0x1001) pointer_handler = handler;
-    else { assert(service == 0x4553); if (method == 1) key_handler = handler; else if (method == 2) board_handler = handler; else stream_handler = handler; }
+    else { assert(service == 0x4553); if (method == 1) key_handler = handler; else if (method == 2) board_handler = handler; else if (method == 3) stream_handler = handler; else timing_handler = handler; }
     return ESP_OK;
 }
 esp_err_t esp_iris_rpc_unregister(uint16_t service, uint16_t method) {
-    assert(method >= 1 && method <= 3);
+    assert(method >= 1 && method <= 4);
     if (service == 0x1001) pointer_handler = NULL;
     else if (method == 1) key_handler = NULL;
     else if (method == 2) board_handler = NULL;
-    else stream_handler = NULL;
+    else if (method == 3) stream_handler = NULL;
+    else timing_handler = NULL;
     return ESP_OK;
 }
 #include "iris_impl.inc"
@@ -96,11 +98,11 @@ int xQueueReceive(QueueHandle_t q, void *event, int ticks) {
 }
 int main(void) {
     s_iris_in = queue;
-    for (int i = 1; i <= 5; i++) {
+    for (int i = 1; i <= 6; i++) {
         registrations = 0; fail_registration = i;
         assert(iris_register() == ESP_FAIL);
         iris_unregister();
-        assert(!screen.begin && !pointer_handler && !key_handler && !board_handler && !stream_handler);
+        assert(!screen.begin && !pointer_handler && !key_handler && !board_handler && !stream_handler && !timing_handler);
     }
     fail_registration = registrations = 0;
     assert(iris_register() == ESP_OK);
@@ -108,6 +110,15 @@ int main(void) {
     uint32_t total;
     assert(screen.begin(&requested, &actual, &total, NULL) == ESP_ERR_INVALID_STATE);
     s_ready = true;
+    uint8_t timing_output[ESPMIRROR_TIMING_BYTES]; size_t timing_size = 99;
+    esp_iris_rpc_request_t timing_request = {0};
+    assert(timing_handler(&timing_request, timing_output, sizeof(timing_output) - 1, &timing_size, NULL) == ESP_ERR_INVALID_ARG);
+    assert(timing_size == 0);
+    assert(timing_handler(&timing_request, timing_output, sizeof(timing_output), &timing_size, NULL) == ESP_OK);
+    assert(timing_size == sizeof(timing_output) && memcmp(timing_output, "EMT1", 4) == 0);
+    timing_request.payload_size = 1;
+    assert(timing_handler(&timing_request, timing_output, sizeof(timing_output), &timing_size, NULL) == ESP_ERR_INVALID_ARG);
+    assert(timing_size == 0);
     assert(screen.begin(&requested, &actual, &total, NULL) == ESP_OK);
     assert(actual.width == 3 && actual.height == 2 && actual.stride == 6 && total == 12 && actual.format == 1);
     requested.format = 3;

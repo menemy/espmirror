@@ -29,6 +29,8 @@ typedef int esp_err_t;
 #define pdMS_TO_TICKS(x) (x)
 #define portENTER_CRITICAL(x) ((void)(x))
 #define portEXIT_CRITICAL(x) ((void)(x))
+#define portENTER_CRITICAL_SAFE(x) portENTER_CRITICAL(x)
+#define portEXIT_CRITICAL_SAFE(x) portEXIT_CRITICAL(x)
 #define ESP_LOGI(tag, ...) ((void)(tag))
 #define ESP_LOGW(tag, ...) ((void)(tag))
 #define ESP_LOGE(tag, ...) ((void)(tag))

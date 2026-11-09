@@ -10,7 +10,7 @@ else()
     list(APPEND espmirror_requires driver)
 endif()
 idf_component_register(SRCS "src/espmirror.c" "src/espmirror_core.c"
-                            "src/espmirror_usb.c" "src/espmirror_lvgl.c"
+                            "src/espmirror_usb.c" "src/espmirror_lvgl.c" "src/espmirror_timing.c"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "src"
                        PRIV_REQUIRES ${espmirror_requires})

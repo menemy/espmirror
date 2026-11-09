@@ -115,8 +115,10 @@ through Iris IMAGE with one acknowledged chunk in flight. The viewer counts
 published F updates and encoded payload bytes, excluding HTTP, WebSocket,
 Iris and the application chunk header. A large update can span multiple F
 messages. These counts are not interchangeable with complete raw frame counts.
-Actual throughput must be measured on hardware; the encoded build has not
-been installed or measured yet.
+Actual throughput must be measured on hardware. The initial encoded panel
+build delivered 47 F updates in 30.689 seconds (1.531 updates/s), with
+181,932 encoded payload bytes on 2026-11-09. This predates the panel ISR
+wakeup change; its throughput must be measured separately.
 Use `mosaico.py ... iris memory --device-id "$DEVICE_ID"` before and during
 the stream to compare device allocations. Do not run streams while another
 board sharing the Gateway is under a power measurement.
@@ -143,3 +145,19 @@ A separate stream run used these `iris device-status` heap snapshots:
 
 The screen backend reads the live framebuffer in chunks. Drawing can occur
 between chunks, so moving content can tear within a received frame.
+
+
+### Bounded timing diagnostics
+
+Append `sdkconfig.timing` to `SDKCONFIG_DEFAULTS` in a fresh build to enable
+read-only timing RPC 0x4553/4. For the panel use
+`sdkconfig.defaults;sdkconfig.panel;sdkconfig.timing`; for mirror-only use
+`sdkconfig.defaults;sdkconfig.timing`. The counters and wire format are in
+[the protocol](../../docs/protocol.md). Compare snapshots around the same
+measurement window, keeping initial reference transfer outside that window.
+The records use fixed storage and do not log or allocate on each frame.
+
+The panel callback explicitly yields when the DMA semaphore wakes its waiter:
+the pinned SPI panel IO driver does not consume the callback's boolean result.
+The single DMA band is still reused only after completion. Compare panel and
+mirror-only producers separately when measuring the transport.

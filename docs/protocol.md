@@ -83,6 +83,31 @@ backend does not freeze drawing across chunks, so raw moving frames may tear.
 | `0x4553` (espmirror keys) | 1 | `<BB>`, key code and down | Accepted pair, unchanged |
 | `0x4553` (espmirror board) | 2 | Empty | Board JSON plus `iris_codec:1`, `iris_chunk` |
 | `0x4553` (stream control) | 3 | `<BIII>`, op, epoch, message, offset | Accepted command, unchanged |
+| `0x4553` (timing, optional) | 4 | Empty | Fixed `EMT1` snapshot, see below |
+
+With `CONFIG_ESPMIRROR_TIMING`, method 4 returns a read-only, coherent snapshot.
+Counters are cumulative since boot and saturate at `UINT64_MAX`; reading does
+not reset them. The header is `"EMT1", count:u8=8, record_bytes:u8=40,
+reserved:u16=0, snapshot_monotonic_us:u64`, followed by eight little-endian
+records of five u64 values: count, total duration, last event timestamp,
+last duration, maximum duration (all times in microseconds). The response is
+336 bytes, independent of runtime. Invalid request bodies and insufficient
+response capacity fail without returning a partial snapshot.
+
+Record order: frame ready, Iris encoder lock wait, Iris encoder build, chunk
+publication, panel present, DMA band done, DMA band wake latency, DMA band wait.
+Frame ready counts positive dirty rectangles submitted through frame_end;
+its timestamp is before releasing the framebuffer lock, and duration is zero.
+Encoder wait covers framebuffer lock acquisition for actual builds; build
+covers the core encoder call. Publication covers a successful media_submit call,
+with timestamp after it returns (Iris DATA timestamps inside the call).
+Mosaico panel present covers a completed 60-band transfer. Band done is the ISR
+timestamp before giving the semaphore, with zero duration; wake measures time
+from that timestamp to the waiter's return, while band wait measures time spent
+in xSemaphoreTake. The semaphore orders the ISR timestamp read; only one DMA
+band is outstanding. Snapshot deltas give window counts and mean durations;
+maxima and last values describe the lifetime/latest observation, not an exact
+per-frame trace. Disabled timing adds no timer reads or counter storage.
 
 Stream op 0 requests a new epoch; message and offset must be zero. Op 1 ACKs
 the next byte offset after a received chunk. Epoch must be nonzero. ACKs from
