@@ -7,8 +7,16 @@ dependencies:
   espressif/esp_lcd_co5300:
     version: "2.2.0"
     rules:
-      - if: '$CONFIG{EXAMPLE_BOARD_ID} == "waveshare_216"'
+      - if: '$CONFIG{EXAMPLE_BOARD_ID} in ["waveshare_216", "waveshare_175c"]'
   espressif/esp_lcd_touch_cst9220:
     version: "0.1.1"
     rules:
       - if: '$CONFIG{EXAMPLE_BOARD_ID} == "waveshare_216"'
+  waveshare/esp_lcd_touch_cst9217:
+    version: "2.0.0"
+    rules:
+      - if: '$CONFIG{EXAMPLE_BOARD_ID} == "waveshare_175c"'
+  espressif/esp_lcd_touch:
+    version: "^1.2.0"
+    rules:
+      - if: '$CONFIG{EXAMPLE_BOARD_ID} in ["waveshare_175c", "waveshare_p4_35"]'

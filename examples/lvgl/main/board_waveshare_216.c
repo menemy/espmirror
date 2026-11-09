@@ -11,11 +11,9 @@
 #include "board_keys.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "driver/i2s_std.h"
 #include "driver/spi_master.h"
 #include "esp_check.h"
-#include "esp_codec_dev.h"
-#include "esp_codec_dev_defaults.h"
+#include "board_codec.h"
 #include "esp_lcd_co5300.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_touch_cst9220.h"
@@ -27,7 +25,6 @@ static i2c_master_bus_handle_t s_i2c;
 static i2c_master_dev_handle_t s_pmu;
 static esp_lcd_panel_handle_t s_panel;
 static esp_lcd_touch_handle_t s_touch;
-static esp_codec_dev_handle_t s_spk, s_mic;
 
 static esp_err_t pmu_read(uint8_t reg, uint8_t *value) {
     return i2c_master_transmit_receive(s_pmu, &reg, 1, value, 1, 20);
@@ -184,70 +181,19 @@ esp_err_t board_display_start(lv_display_t *disp) {
 }
 
 esp_err_t board_audio_start(void) {
-#if CONFIG_ESPMIRROR_AUDIO
-    i2s_chan_handle_t tx, rx;
-    i2s_chan_config_t channels = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    channels.auto_clear = true;
-    ESP_RETURN_ON_ERROR(i2s_new_channel(&channels, &tx, &rx), TAG, "I2S channels");
-    const i2s_std_config_t bus = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
-        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-        .gpio_cfg = {.mclk = 42, .bclk = 9, .ws = 45, .dout = 8, .din = 10},
+    const board_codec_config_t audio = {
+        .bus = s_i2c, .mclk = 42, .bclk = 9, .ws = 45, .dout = 8, .din = 10,
+        .amplifier = 46, .es7210 = true,
     };
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx, &bus), TAG, "I2S TX");
-    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx, &bus), TAG, "I2S RX");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), TAG, "TX enable");
-    ESP_RETURN_ON_ERROR(i2s_channel_enable(rx), TAG, "RX enable");
-    audio_codec_i2s_cfg_t data_cfg = {.port = I2S_NUM_0, .tx_handle = tx, .rx_handle = rx};
-    const audio_codec_data_if_t *data = audio_codec_new_i2s_data(&data_cfg);
-    audio_codec_i2c_cfg_t ctrl_cfg = {.port = I2C_NUM_0, .bus_handle = s_i2c, .addr = ES8311_CODEC_DEFAULT_ADDR};
-    const audio_codec_ctrl_if_t *dac_ctrl = audio_codec_new_i2c_ctrl(&ctrl_cfg);
-    ctrl_cfg.addr = ES7210_CODEC_DEFAULT_ADDR;
-    const audio_codec_ctrl_if_t *adc_ctrl = audio_codec_new_i2c_ctrl(&ctrl_cfg);
-    const audio_codec_gpio_if_t *gpio = audio_codec_new_gpio();
-    ESP_RETURN_ON_FALSE(data && dac_ctrl && adc_ctrl && gpio, ESP_ERR_NO_MEM, TAG, "codec interfaces");
-    es8311_codec_cfg_t dac_cfg = {
-        .ctrl_if = dac_ctrl, .gpio_if = gpio, .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
-        .pa_pin = 46, .use_mclk = true, .hw_gain = {.pa_voltage = 5.0, .codec_dac_voltage = 3.3},
-    };
-    es7210_codec_cfg_t adc_cfg = {.ctrl_if = adc_ctrl, .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2};
-    const audio_codec_if_t *dac = es8311_codec_new(&dac_cfg);
-    const audio_codec_if_t *adc = es7210_codec_new(&adc_cfg);
-    ESP_RETURN_ON_FALSE(dac && adc, ESP_FAIL, TAG, "codec init");
-    esp_codec_dev_cfg_t speaker = {.dev_type = ESP_CODEC_DEV_TYPE_OUT, .codec_if = dac, .data_if = data};
-    esp_codec_dev_cfg_t microphone = {.dev_type = ESP_CODEC_DEV_TYPE_IN, .codec_if = adc, .data_if = data};
-    s_spk = esp_codec_dev_new(&speaker);
-    s_mic = esp_codec_dev_new(&microphone);
-    ESP_RETURN_ON_FALSE(s_spk && s_mic, ESP_ERR_NO_MEM, TAG, "codec devices");
-    esp_codec_dev_sample_info_t format = {.sample_rate = 16000, .channel = 2, .bits_per_sample = 16};
-    ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_spk, &format), TAG, "speaker open");
-    ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_mic, &format), TAG, "mic open");
-    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_spk, 60), TAG, "speaker volume");
-    ESP_RETURN_ON_ERROR(esp_codec_dev_set_in_gain(s_mic, 24), TAG, "mic gain");
-    return ESP_OK;
-#else
-    return ESP_ERR_NOT_SUPPORTED;
-#endif
+    return board_codec_start(&audio);
 }
 
 size_t board_mic_read(int16_t *mono, size_t frames) {
-    if (!s_mic || frames > 320) return 0;
-    int16_t stereo[640];
-    if (esp_codec_dev_read(s_mic, stereo, frames * 4) != ESP_CODEC_DEV_OK) return 0;
-    for (size_t i = 0; i < frames; i++) mono[i] = ((int32_t)stereo[i * 2] + stereo[i * 2 + 1]) / 2;
-    return frames;
+    return board_codec_read(mono, frames);
 }
 
 void board_speaker_write(const int16_t *mono, size_t frames) {
-    if (!s_spk) return;
-    int16_t stereo[640];
-    while (frames) {
-        size_t count = frames < 320 ? frames : 320;
-        for (size_t i = 0; i < count; i++) stereo[i * 2] = stereo[i * 2 + 1] = mono[i];
-        if (esp_codec_dev_write(s_spk, stereo, count * 4) != ESP_CODEC_DEV_OK) return;
-        mono += count;
-        frames -= count;
-    }
+    board_codec_write(mono, frames);
 }
 
 #endif

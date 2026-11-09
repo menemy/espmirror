@@ -25,6 +25,16 @@ jobs:
         include:
           - idf: "v5.4.3"
             example: lvgl
+            target: esp32s3
+            variant: waveshare-175c
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-175c"
+          - idf: "v6.0.1"
+            example: lvgl
+            target: esp32s3
+            variant: waveshare-175c
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-175c"
+          - idf: "v5.4.3"
+            example: lvgl
             target: esp32
             variant: default
           - idf: "v5.4.3"

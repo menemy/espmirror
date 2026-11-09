@@ -53,11 +53,18 @@ static const char *TAG = "lvgl";
 
 #define W CONFIG_EXAMPLE_MIRROR_WIDTH
 #define H CONFIG_EXAMPLE_MIRROR_HEIGHT
+#if CONFIG_EXAMPLE_MIRROR_ROUND
+#define UI_W (W * 7 / 10)
+#define UI_H (H * 7 / 10)
+#else
+#define UI_W W
+#define UI_H H
+#endif
 #define RATE 16000
 #define CHUNK 320                      /* 20 ms of audio */
-#define SMALL (W < 200 || H < 200)   /* a 128 px screen: smaller type, icons for words, no status line */
-#define SPEC_W (W - 16)
-#define SPEC_H (SMALL ? 32 : (H - 156 > 40 ? H - 156 : 40))   /* under the status line: 44 rows at 200, 84 at 240 */
+#define SMALL (UI_W < 200 || UI_H < 200)   /* a 128 px screen: smaller type, icons for words, no status line */
+#define SPEC_W (UI_W - 16)
+#define SPEC_H (SMALL ? 32 : (UI_H - 156 > 40 ? UI_H - 156 : 40))   /* under the status line: 44 rows at 200, 84 at 240 */
 #define FFT_N 128
 
 /* ---- Sound: three small sounds, synthesised, 16 kHz mono --------------------- */
@@ -300,12 +307,20 @@ static void build_ui(void) {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x14161c), 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+#if CONFIG_EXAMPLE_MIRROR_ROUND
+    lv_obj_t *content = lv_obj_create(scr);
+    lv_obj_remove_style_all(content);
+    lv_obj_set_size(content, UI_W, UI_H);
+    lv_obj_center(content);
+    lv_obj_clear_flag(content, LV_OBJ_FLAG_SCROLLABLE);
+    scr = content;
+#endif
 
     /* Rows, from the top: the title, the LEDs, the buttons, the ball, the bar, (the status), the spectrogram. */
     const int pad = SMALL ? 6 : 10, gap = SMALL ? 6 : 10;
     const int y_led = SMALL ? 26 : 42, y_btn = SMALL ? 36 : 58, h_btn = SMALL ? 22 : 30;
     const int y_ball = SMALL ? 64 : 92, ball_px = SMALL ? 12 : 18, bounce = SMALL ? 10 : 14, y_bar = SMALL ? 84 : 124;
-    const int w_btn = (W - 2 * pad - 3 * gap) / 4;   /* three sounds and the microphone */
+    const int w_btn = (UI_W - 2 * pad - 3 * gap) / 4;   /* three sounds and the microphone */
 
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "espmirror");
@@ -367,7 +382,7 @@ static void build_ui(void) {
     lv_anim_init(&a);
     lv_anim_set_var(&a, ball);
     lv_anim_set_exec_cb(&a, ball_x);
-    lv_anim_set_values(&a, pad, W - pad - ball_px);
+    lv_anim_set_values(&a, pad, UI_W - pad - ball_px);
     lv_anim_set_duration(&a, 1400);
     lv_anim_set_playback_duration(&a, 1400);
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
@@ -384,7 +399,7 @@ static void build_ui(void) {
     lv_anim_start(&a);
 
     lv_obj_t *bar = lv_bar_create(scr);
-    lv_obj_set_size(bar, W - 2 * pad, SMALL ? 4 : 6);
+    lv_obj_set_size(bar, UI_W - 2 * pad, SMALL ? 4 : 6);
     lv_obj_set_pos(bar, pad, y_bar);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x2a2e3a), LV_PART_MAIN);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x5b8def), LV_PART_INDICATOR);
@@ -408,7 +423,7 @@ static void build_ui(void) {
     s_canvas = lv_canvas_create(scr);
     lv_canvas_set_draw_buf(s_canvas, &s_spec_buf);
     lv_canvas_fill_bg(s_canvas, lv_color_hex(0x0b0c10), LV_OPA_COVER);
-    lv_obj_set_pos(s_canvas, 8, H - SPEC_H - (SMALL ? 4 : 6));
+    lv_obj_set_pos(s_canvas, 8, UI_H - SPEC_H - (SMALL ? 4 : 6));
 
     s_status = lv_label_create(scr);
     lv_obj_set_style_text_color(s_status, lv_color_hex(0x8a8f9a), 0);
@@ -417,7 +432,7 @@ static void build_ui(void) {
     if (SMALL) lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);   /* no room: the line stays in the log */
 
     /* The ripple under a touch, hidden until one. */
-    s_ripple = lv_obj_create(scr);
+    s_ripple = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_ripple, SMALL ? 18 : 28, SMALL ? 18 : 28);
     lv_obj_set_style_radius(s_ripple, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_ripple, lv_color_hex(0xffffff), 0);
@@ -583,6 +598,11 @@ void app_main(void) {
         {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
         {ESPMIRROR_KEY_POWER, "PWR", -1, -1},
     };
+#elif CONFIG_EXAMPLE_BOARD_WAVESHARE_175C
+    static const espmirror_button_t buttons[] = {
+        {ESPMIRROR_KEY_AUX, "KEY", -1, -1},
+        {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
+    };
 #endif
     const espmirror_config_t cfg = {
         .name = CONFIG_EXAMPLE_MIRROR_NAME,
@@ -590,12 +610,15 @@ void app_main(void) {
         .height = H,
         .ppi = CONFIG_EXAMPLE_MIRROR_PPI,
         .corner_radius = 0,
+#if CONFIG_EXAMPLE_MIRROR_ROUND
+        .round = true,
+#endif
         .on_key = on_key,
         .on_pointer = on_pointer,
         .on_listen = on_listen,
         .on_talk = on_talk,
         .on_talk_audio = on_talk_audio,
-#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C
         .buttons = buttons,
         .button_count = sizeof(buttons) / sizeof(buttons[0]),
 #endif

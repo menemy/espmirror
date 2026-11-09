@@ -14,6 +14,7 @@ and `CONFIG_ESPMIRROR_AUDIO`.
 | Any devkit | Virtual, configurable | Viewer | Viewer 1, 2, 3 | Viewer indicator | Synthesised playback to viewer | Not yet |
 | XOrigin AIPI Lite | ST7789, 128 × 128 SPI | None | BOOT/talk (2), PWR (3) | Viewer indicator only | ES8311 speaker and mic | Not yet for this revision |
 | Waveshare ESP32-S3-Touch-AMOLED-2.16 | CO5300, 480 × 480 QSPI | CST9220 | KEY (1), BOOT (2), PWR (3) | No programmable board LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
+| Waveshare ESP32-S3-Touch-AMOLED-1.75C | CO5300, 466 × 466 round QSPI | CST9217 | KEY (1), BOOT (2) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 
 ## Waveshare AMOLED 2.16
 
@@ -55,6 +56,25 @@ Pin assignments, display register values and touch orientation come from the
 [Waveshare BSP revision bfeb6e6](https://github.com/waveshareteam/Waveshare-ESP32-components/tree/bfeb6e6d5737178cdde78b630c8118074da0a657/bsp/esp32_s3_touch_amoled_2_16).
 The example uses Espressif's CO5300 2.2.0 and CST9220 0.1.1 drivers and
 `esp_codec_dev`. It does not use the BSP's LVGL task or display buffers.
+
+## Waveshare AMOLED 1.75C
+
+The `sdkconfig.waveshare-175c` overlay selects the 466 × 466 round CO5300
+panel and CST9217 touch controller. Use the build command above with that
+overlay and a separate build directory. The viewer name is `Waveshare 1.75C`.
+The UI occupies a centered 326 × 326 square so that its controls fit inside
+the circular panel. The panel and mirror remain 466 × 466, with round geometry
+advertised to the viewer. Fonts are the same as on the rectangular boards.
+
+This is the 1.75C board. Its panel reset is GPIO1, touch reset GPIO2 and codec
+MCLK GPIO16. The physical PWR button reaches GPIO3 through an inverter and
+appears as KEY (1) in the viewer; BOOT on GPIO0 is code 2. GPIO keys are
+debounced independently for 30 ms. The panel has a six-pixel column offset.
+ES8311 speaker output and ES7210 microphone input share a 16 kHz stereo I2S
+bus; the mirror uses mono samples. ALDO1 supplies the codecs at 3.3 V.
+
+The hardware reference is Waveshare's
+[1.75C BSP revision 010c5fb](https://github.com/waveshareteam/Waveshare-ESP32-components/tree/010c5fb39ea7f0e996efd1f8e162cc70e569e57f/bsp/esp32_s3_touch_amoled_1_75c).
 
 ## Hardware checks
 
