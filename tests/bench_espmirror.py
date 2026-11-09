@@ -27,7 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 from fake_board import text
 
-NAMES = ('raw', 'row-rle', 'column-rle', 'delta-rle', 'qoi', 'select')
+NAMES = ('raw', 'row-rle', 'column-rle', 'delta-rle', 'qoi', 'select',
+         'select-base', 'select-delta', 'select-qoi', 'copy', 'dirty')
 
 
 def sprite(phase):
@@ -101,9 +102,20 @@ def s3_us(coding, pixels, size):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--repeats', type=int, default=10)
+    ap.add_argument('--size', action='append', metavar='WIDTHxHEIGHT',
+                    help='repeat for multiple geometries; default: 172x640, 466x466')
     args = ap.parse_args()
     if args.repeats < 1:
         ap.error('--repeats must be positive')
+    sizes = []
+    for size in args.size or ('172x640', '466x466'):
+        try:
+            w, h = map(int, size.lower().split('x'))
+        except ValueError:
+            ap.error('--size must be WIDTHxHEIGHT')
+        if not (128 <= w <= 640 and 128 <= h <= 640):
+            ap.error('--size dimensions must be between 128 and 640')
+        sizes.append((w, h))
     with tempfile.TemporaryDirectory() as tmp:
         exe = Path(tmp) / 'mirror-bench'
         cc = shlex.split(os.environ.get('CC', 'cc'))
@@ -116,15 +128,16 @@ def main():
               'allow at least 0.5x-2x for individual codecs, plus PSRAM/contention. '
               'Select is a pessimistic full-pass budget.', file=sys.stderr)
         print('width,height,scene,frames,coding,bytes_per_frame,host_us_per_frame,s3_budget_us_per_frame')
-        for w, h in ((172, 640), (466, 466)):
+        for w, h in sizes:
             for name, frames in scenes(w, h):
                 result = subprocess.run([str(exe), str(w), str(h), str(len(frames)), str(args.repeats)],
                                         input=frames.astype('<u2').tobytes(), capture_output=True, check=True)
                 for line in result.stdout.decode().splitlines():
                     coding, size, us, _checksum = line.split(',')
                     coding, size = int(coding), float(size)
-                    print('%d,%d,%s,%d,%s,%.1f,%s,%.1f' %
-                          (w, h, name, len(frames), NAMES[coding], size, us, s3_us(coding, w*h, size)))
+                    budget = '%.1f' % s3_us(coding, w*h, size) if coding <= 5 else ''
+                    print('%d,%d,%s,%d,%s,%.1f,%s,%s' %
+                          (w, h, name, len(frames), NAMES[coding], size, us, budget))
 
 
 if __name__ == '__main__':

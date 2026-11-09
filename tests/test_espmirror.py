@@ -234,6 +234,19 @@ class MirrorCore(unittest.TestCase):
         source[:, 62::63] = 0xffff
         self.code(source, flags=2)
 
+    def test_last_candidate_small_message_remainders(self):
+        rng = np.random.default_rng(740)
+        source = np.zeros((24, 24), np.uint16)
+        commands = bytearray()
+        for x in (0, 9, 18):
+            pixels = rng.choice(np.array([0, 0xf800, 0x07e0, 0x001f], np.uint16), (24, 6))
+            source[:, x:x + 6] = pixels
+            commands += self.update(x, 0, pixels)
+        for flags in (0, 1, 2, 3):
+            for capacity in range(70, 129):
+                with self.subTest(flags=flags, capacity=capacity):
+                    self.code(source, commands, flags=flags, cap=capacity)
+
     def test_delta_reset_for_new_viewer(self):
         source = np.arange(300, dtype=np.uint16).reshape(3, 100)
         commands = self.update(0, 0, source) + b'D\x00R' + self.update(0, 0, source)

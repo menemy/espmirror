@@ -169,24 +169,29 @@ static size_t qoi(const uint16_t *fb, int stride, uint8_t *out, size_t limit,
 static size_t code_rect(espmirror_core_t *c, const uint16_t *fb, uint8_t *out,
                         size_t room, int x, int y, int w, int h, bool try_cols)
 {
+    if (room <= RECT_HDR) return 0;
     size_t n = (size_t)w * h * 2;
     int enc = 0;
+    bool row_only = !try_cols && !c->flags;
     for (int candidate = 1; candidate <= 4; candidate++) {
         if ((candidate == 2 && !try_cols && !c->flags)
             || (candidate == 3 && !(c->flags & ESPMIRROR_DELTA))
             || (candidate == 4 && !(c->flags & ESPMIRROR_QOI))) continue;
-        size_t size = candidate == 4 ? qoi(fb, c->w, NULL, n - 1, x, y, w, h)
-            : rle(fb, candidate == 3 ? c->previous : NULL, c->w, NULL,
-                  n - 1, x, y, w, h, candidate == 2);
+        size_t limit = n - 1;
+        if (limit > room - RECT_HDR) limit = room - RECT_HDR;
+        /* An earlier winner overwrites a losing trial below. */
+        size_t size;
+        if (candidate == 4) size = qoi(fb, c->w, out + RECT_HDR, limit, x, y, w, h);
+        else if (row_only) size = rle(fb, NULL, c->w, out + RECT_HDR, limit, x, y, w, h, false);
+        else size = rle(fb, candidate == 3 ? c->previous : NULL, c->w, NULL,
+                        n - 1, x, y, w, h, candidate == 2);
         if (size < n) { n = size; enc = candidate; }
     }
     if (RECT_HDR + n > room) return 0;
     uint8_t *p = out + RECT_HDR;
-    if (enc == 4) {
-        qoi(fb, c->w, p, n, x, y, w, h);
-    } else if (enc) {
+    if (enc && enc != 4 && !row_only) {
         rle(fb, enc == 3 ? c->previous : NULL, c->w, p, n, x, y, w, h, enc == 2);
-    } else {
+    } else if (!enc) {
         for (int r = 0; r < h; r++) {
             const uint16_t *row = fb + (size_t)(y + r) * c->w + x;
             for (int i = 0; i < w; i++) put16(p + ((size_t)r * w + i) * 2, row[i]);

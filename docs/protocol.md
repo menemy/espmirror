@@ -133,9 +133,11 @@ line boundaries. QOI expands RGB565 by bit replication, uses fresh zero RGBA
 index entries and previous pixel (0,0,0,255), and supports RGB, RGBA, INDEX,
 DIFF, LUMA and RUN. Output must be opaque. Exactly w*h pixels and all payload
 bytes must be consumed. Delta and QOI are independent opt-in Kconfig options.
-The encoder counts each enabled candidate with an early size cutoff and emits
-the shortest. At most four linear candidate passes plus emission and reference
-copy per rectangle attempt; no candidate-size scratch allocation. Whole attempts
+The encoder tests each enabled candidate with an early size cutoff and emits
+the shortest. QOI and row-only band attempts write into the available output
+space during their trial. If that trial wins, no second encoding pass is needed;
+otherwise the selected codec overwrites the trial. At most four linear candidate passes plus
+one emission and reference copy per rectangle attempt; no candidate-size scratch allocation. Whole attempts
 are limited to 60000 pixels before capacity-sized bands are used.
 
 Delta reference starts black and advances after every emitted rectangle,
