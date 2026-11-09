@@ -11,6 +11,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(os.name == 'posix', 'C harnesses use POSIX stubs and sanitizers')
 class ComponentTests(unittest.TestCase):
     def test_component_configurations(self):
         for wifi, audio, usb in ((0, 0, 1), (0, 1, 1), (1, 0, 0), (1, 1, 1)):

@@ -37,8 +37,8 @@ goes into the bug report.
 - **Audio**: the viewer hears the board's speaker (clicks, cues, replies) or
   its microphone, and can talk into the board's speaker. Off at build time
   if you don't want it.
-- **The viewer** is PySide6, written for Windows, Linux and macOS and tested on
-  macOS so far: no title bar, the device and its buttons, real size on any
+- **The viewer** is PySide6, with offscreen CI configured for Windows, Linux
+  and macOS; physical boards have been tested on macOS: no title bar, the device and its buttons, real size on any
   display (it reads the display's millimetres), record to mp4, screenshot to
   png, float on top, Dock icon with the live screen.
 - **Device profiles**: the viewer knows the Waveshare 2.16 and 1.75C AMOLED
@@ -56,7 +56,7 @@ goes into the bug report.
 | ESP-IDF | 5.1 or later; the LVGL hook needs LVGL 9.5 or later (from the registry: ESP-IDF 5.4 or later, whose component manager reads LVGL's manifest) |
 | RAM | the screen copy `width × height × 2` bytes, the message buffer (32 KB by default, 8 KB at least), 1 KB input, 16 KB for audio when on, 4 KB of task stack |
 | PSRAM | not required; used when present (`CONFIG_ESPMIRROR_PREFER_PSRAM`) |
-| Computer | Python 3.11+ and PySide6 on macOS (tested), Linux or Windows (not tested yet); `ffmpeg` for recordings |
+| Computer | Python 3.11+ and PySide6 on macOS, Linux or Windows; `ffmpeg` for recordings; platform coverage below |
 
 Version 1 baseline RAM, excluding the v2 USB queue and optional delta reference:
 
@@ -187,6 +187,36 @@ python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
 # explicit network target: python tools/espmirror.py 192.168.1.42
 ```
 
+On Windows, from PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r tools/requirements.txt
+.\.venv\Scripts\python.exe tools/espmirror.py
+# or: .\.venv\Scripts\python.exe tools/espmirror.py COM12
+```
+
+On Linux, USB Serial/JTAG and TinyUSB CDC ports normally appear as
+`/dev/ttyACM*`. Check access with `ls -l /dev/ttyACM0`. On Debian and Ubuntu,
+add your user to the device's `dialout` group with
+`sudo usermod -aG dialout "$USER"`, then log out and back in. Some distributions
+use `uucp` instead. A desktop session may grant access through a udev `uaccess`
+rule; containers and remote sessions may not receive that ACL. If your system
+needs a custom rule, scope it to the board's VID, PID and, for multiple boards,
+serial number. USB Serial/JTAG is `303a:1001`; use `udevadm info` to inspect a
+TinyUSB board's IDs. Keep the normal group permissions; do not run the viewer
+as root. Close serial monitors before connecting. Discovery only reads port
+descriptors; the selected board is opened for the mirror handshake.
+
+On Windows, pyserial opens `COMn` ports, including numbers above 9. USB
+Serial/JTAG is selected by VID/PID. Because Windows port enumeration does not
+provide the product/interface strings used on Linux/macOS, Espressif TinyUSB
+PIDs `4000` through `40ff` are candidates; a candidate must answer the mirror
+handshake. USB network driver support and the DNS caveat are in Transports
+above. This serial path does not require the USB network interface.
+See [pyserial port enumeration](https://pyserial.readthedocs.io/en/latest/tools.html#serial.tools.list_ports)
+for the platform-dependent descriptor fields.
+
 Drag by the body or the arrows button at the top, resize by any corner.
 The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
 Mic (Cmd Shift L), Talk (Cmd K), Bigger, Smaller, Actual size (Cmd 0),
@@ -210,6 +240,38 @@ passive. `--wifi` adds mDNS; an explicit address always selects TCP.
 `--stats` prints frame statistics with no window for `--seconds N` (5 by
 default); with it, `--png out.png` saves the screen once it is still.
 `--scale K` starts the window at K times the real size.
+
+Captures use the operating system's Desktop folder, including redirected
+Windows desktops and Linux XDG directories, or the home directory if that
+folder is absent. `ffmpeg -version` checks that the command-line encoder is
+available; its build must include `libx264`. Qt's multimedia libraries alone
+do not provide the `ffmpeg` command used for recordings. On Windows, allow
+desktop applications to access the microphone in the system privacy settings
+before using Talk ([Microsoft's microphone permissions guide](https://support.microsoft.com/en-us/windows/privacy/turn-on-app-permissions-for-your-microphone-in-windows)).
+The Desktop folder is resolved through [Qt standard paths](https://doc.qt.io/qt-6/qstandardpaths.html).
+
+### Platform checks
+
+The `viewer` CI job is configured for Python 3.12 on macOS, Ubuntu and Windows,
+with `QT_QPA_PLATFORM=offscreen`. It runs protocol/decoder tests, mocked USB
+descriptor discovery and audio-device tests, profile rendering at scale
+factors 1, 1.5 and 2, and a TCP fake-board test with key input and PNG capture.
+The Linux job installs Qt's system libraries, `ffmpeg` and `ffprobe`. When those
+commands are on PATH, the suite also encodes an MP4 and checks its H.264 stream.
+C sanitizer harnesses and the serial PTY test run only on POSIX;
+the PTY uses real pyserial data I/O with modem-line updates stubbed because
+PTYs have no DTR/RTS lines.
+
+These checks do not verify real USB enumeration, Windows COM control-line
+behaviour, physical audio playback/capture, microphone permissions, USB NCM
+networking, or interaction with a desktop window manager. Windows hardware
+has not been tested. Offscreen scale-factor tests do not establish physical
+screen size or behaviour across monitors with different DPI settings.
+
+On 2026-11-09, all 65 host tests passed in a Debian 13 aarch64 container with
+Python 3.12.16, PySide6 6.12.0, pyserial 3.5 and ffmpeg 7.1.5. That run included
+the offscreen TCP and serial PTY fake-board tests, PNG capture and MP4 encoding.
+No USB devices or physical audio devices were passed into the container.
 
 ## Examples
 

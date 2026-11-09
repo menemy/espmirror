@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ViewerTests(unittest.TestCase):
     def test_profiles_states_keys_and_capture(self):
         script = r'''
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -31,6 +32,8 @@ completed = []
 def check():
     win = next(w for w in app.topLevelWidgets() if hasattr(w, 'render_devices'))
     try:
+        scale = float(os.environ['QT_SCALE_FACTOR'])
+        assert win.devicePixelRatioF() == scale
         names = ['waveshare-s3-216', 'waveshare-s3-154g', 'waveshare-s3-349',
                  'waveshare-p4-35', 'waveshare-s3-175c', 'aipi-lite']
         for i, name in enumerate(names):
@@ -57,6 +60,7 @@ def check():
                     d.link.led = state + 1
                 shot = win.render_devices()
                 assert not shot.isNull()
+                assert shot.devicePixelRatio() == scale
                 assert shot.save(str(Path(folder) / ('state%d.png' % state)))
                 renders.append(bytes(shot.constBits()))
             assert renders[0] != renders[1] != renders[2]
@@ -77,10 +81,12 @@ if errors:
     raise errors[0]
 assert completed, "viewer callback did not run"
 '''
-        result = subprocess.run([sys.executable, '-c', script], cwd=ROOT / 'tools',
-                                env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen'},
-                                capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for scale in ('1', '1.5', '2'):
+            with self.subTest(scale=scale):
+                result = subprocess.run([sys.executable, '-c', script], cwd=ROOT / 'tools',
+                                        env={**os.environ, 'QT_QPA_PLATFORM': 'offscreen', 'QT_SCALE_FACTOR': scale},
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == '__main__':

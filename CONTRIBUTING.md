@@ -21,8 +21,9 @@ somebody with the board can finish it.
 
 ## Viewer
 
-The PySide6 viewer is written for macOS, Linux and Windows; only macOS is
-tested so far. Keep its device profiles in one list. Run
+The PySide6 viewer has offscreen CI configured for macOS, Linux and Windows;
+see the README's platform checks for coverage and hardware limits.
+Keep its device profiles in one list. Run
 `python -m unittest discover -s tests` before a pull request; PySide6 enables
 the offscreen rendering test. Exercise microphone permission and playback on
 the platforms your change affects.

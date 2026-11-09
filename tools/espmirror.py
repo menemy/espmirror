@@ -866,7 +866,12 @@ def png_write(path, rgb):
 
 def desktop_path(ext, tag="", stamp=None):
     home = os.path.expanduser("~")
-    folder = os.path.join(home, "Desktop")
+    try:
+        from PySide6.QtCore import QStandardPaths
+    except ImportError:
+        folder = os.path.join(home, "Desktop")
+    else:
+        folder = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DesktopLocation)
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
     return os.path.join(folder if os.path.isdir(folder) else home, "mirror-%s%s.%s" % (stamp, tag, ext))
 

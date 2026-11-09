@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@unittest.skipUnless(os.name == 'posix', 'C harnesses use POSIX stubs and sanitizers')
 class VirtualTests(unittest.TestCase):
     def compile(self, source, args, run=False):
         with tempfile.TemporaryDirectory() as tmp:

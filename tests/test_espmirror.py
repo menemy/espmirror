@@ -38,6 +38,7 @@ def load(name):
 mirror = load('espmirror')
 
 
+@unittest.skipUnless(os.name == 'posix', 'C harnesses require a POSIX sanitizer toolchain')
 class MirrorCore(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -493,6 +494,7 @@ class CableFramingTests(unittest.TestCase):
             self.assertEqual(len(errors), 1)
             self.assertLess(len(demux.buffer), 2)
 
+    @unittest.skipUnless(os.name == 'posix', 'C harness uses pthreads and sanitizers')
     def test_firmware_serial_send_and_log_lock(self):
         source = (ROOT / 'src/espmirror.c').read_text()
         send = source[source.index('#define SERIAL_CHUNK'):source.index('static bool viewer_send', source.index('#define SERIAL_CHUNK'))]
@@ -518,6 +520,7 @@ class CableFramingTests(unittest.TestCase):
             for i, line in enumerate(logs.splitlines()):
                 self.assertEqual(line.decode(), 'log %d %0600d' % (i, i))
 
+    @unittest.skipUnless(os.name == 'posix', 'C harness requires a POSIX sanitizer toolchain')
     def test_firmware_session_pump(self):
         source = (ROOT / 'src/espmirror.c').read_text()
         impl = source[source.index('static void serial_end(void)\n'):source.index('static char s_log_line')]
@@ -911,7 +914,8 @@ class SerialTests(unittest.TestCase):
         instances = self.install()
         attrs = [11, 22, 0x471, 44, 55, 66, []]
         termios = SimpleNamespace(HUPCL=0x400, TCSANOW=0, tcgetattr=Mock(return_value=attrs), tcsetattr=Mock())
-        with patch.dict(sys.modules, {'termios': termios}), patch.object(self.Serial, 'fileno', lambda self: 17, create=True):
+        with patch.object(mirror.os, 'name', 'posix'), patch.dict(sys.modules, {'termios': termios}), \
+                patch.object(self.Serial, 'fileno', lambda self: 17, create=True):
             with patch.object(mirror.time, 'monotonic', side_effect=[0, 6]):
                 with self.assertRaises(ConnectionError):
                     mirror.open_serial('/dev/ttyACM0')
@@ -923,8 +927,15 @@ class SerialTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
         for termios in (None, SimpleNamespace(tcgetattr=Mock(side_effect=OSError('unsupported')))):
-            with patch.dict(sys.modules, {'termios': termios}):
+            with patch.object(mirror.os, 'name', 'posix'), patch.dict(sys.modules, {'termios': termios}):
                 mirror.keep_serial_lines_on_close(SimpleNamespace(fileno=lambda: 17))
+
+    def test_hupcl_not_used_on_windows(self):
+        from unittest.mock import Mock, patch
+        ser = Mock()
+        with patch.object(mirror.os, 'name', 'nt'):
+            mirror.keep_serial_lines_on_close(ser)
+        ser.fileno.assert_not_called()
 
 
 
@@ -954,6 +965,7 @@ class TextInputTests(unittest.TestCase):
         link.disconnect()
         self.assertFalse(mirror.route_text_key(link, None, paste=text, modified=True))
 
+    @unittest.skipUnless(os.name == 'posix', 'C harness requires a POSIX sanitizer toolchain')
     def test_firmware_text_parser(self):
         with tempfile.TemporaryDirectory() as folder:
             exe = Path(folder) / 'text-harness'
