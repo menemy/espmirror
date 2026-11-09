@@ -33,6 +33,8 @@ Keep the component free of display libraries: the LVGL hook is a separate
 file compiled only when LVGL is in the build; an e-paper or a camera path is
 `espmirror_draw()` from your code. Changes to the wire need a note in
 docs/protocol.md and must document compatibility and update the protocol version.
+A change to the encoders gets a run of `tests/bench_espmirror.py`; docs/bench.md
+says what it measures and what it does not.
 
 Build basic and lvgl for `esp32s3` and `esp32`. CI checks those on ESP-IDF
 5.1, 5.4 and 6.0 (LVGL needs 5.4+), and virtual on `esp32s3` with 5.4 and

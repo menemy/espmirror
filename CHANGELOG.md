@@ -8,7 +8,9 @@ PySide6 and finds USB boards by itself. `CONFIG_ESPMIRROR_USB_NETWORK` puts a
 serial port and a network on the cable of a chip with USB OTG.
 `CONFIG_ESPMIRROR_WIFI` is now `CONFIG_ESPMIRROR_TCP`; `sdkconfig.rename` maps
 the old name, so existing configurations keep TCP. Delta and QOI codings, off
-by default. `examples/virtual` runs LVGL on a bare ESP32-S3.
+by default. Typing from the viewer into a text field on the board
+(`O`, `I`, `K`; the LVGL hook finds the focused textarea).
+`examples/virtual` runs LVGL on a bare ESP32-S3.
 
 ## 0.1.0
 

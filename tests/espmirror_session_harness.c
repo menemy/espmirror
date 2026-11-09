@@ -49,6 +49,8 @@ static int xQueueSend(int q, const serial_msg_t *m, int ticks)
 static void xSemaphoreGive(int sem) { if (sem == s_serial_done) acknowledgements++; }
 static void xSemaphoreTake(int sem, int ticks) { (void)sem; (void)ticks; }
 static void keys_release(void) { held = 0; }
+static int text_resets;
+static void text_reset(void) { text_resets++; }
 static void pointer_put(int x, int y, bool down) { (void)x; (void)y; pointer_down = down; }
 static bool viewer_send(const void *p, size_t n, int ms)
 {
@@ -80,12 +82,12 @@ int main(void)
     s_serial_open = true;
     put(SERIAL_HELLO);
     serial_pump();
-    assert(s_serial && boards == 1 && dirty == 1);
+    assert(s_serial && boards == 1 && dirty == 1 && text_resets == 1);
     held = 6; pointer_down = true;
     s_serial_open = false;
     put(3); put(SERIAL_BYE);
     serial_pump();
-    assert(!s_serial && !held && !pointer_down && !inputs && acknowledgements == 1);
+    assert(!s_serial && !held && !pointer_down && !inputs && acknowledgements == 1 && text_resets == 2);
     put(SERIAL_HELLO); put(SERIAL_BYE);
     serial_pump();
     assert(boards == 1 && acknowledgements == 2);

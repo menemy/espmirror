@@ -556,6 +556,46 @@ def apply_frame(fb, msg, seen=None):
     return state
 
 
+TEXT_EDITS = {"Backspace": 1, "Delete": 2, "Left": 3, "Right": 4, "Enter": 5}
+
+
+def text_messages(text):
+    """'I' messages of whole UTF-8 characters, 63 bytes of text at most each."""
+    chunk = bytearray(b"I")
+    for char in text:
+        if char == "\0":
+            continue
+        encoded = char.encode("utf-8")
+        if len(chunk) + len(encoded) > 64:
+            yield bytes(chunk)
+            chunk = bytearray(b"I")
+        chunk.extend(encoded)
+    if len(chunk) > 1:
+        yield bytes(chunk)
+
+
+def route_text_key(link, key, text="", *, paste=None, modified=False):
+    """True when a field open on the board took the key; nothing typed goes to a log."""
+    if not link.text_open:
+        return False
+    if paste is not None:
+        for msg in text_messages(paste):
+            link.send(msg)
+        return True
+    if modified:
+        return False
+    if key in TEXT_EDITS:
+        link.send(bytes((ord("K"), TEXT_EDITS[key])))
+        return True
+    if key == "Escape":
+        return True       # LVGL has no generic back action for a field; it stays with the field
+    if text and all(c.isprintable() for c in text):
+        for msg in text_messages(text):
+            link.send(msg)
+        return True
+    return False
+
+
 class Link:
     """One board's connection, on a thread of its own; it reconnects until closed, and after 'T' (another
     viewer took the screen) waits for take_back(). on_board(info), on_frame() and on_status(text) are
@@ -579,6 +619,7 @@ class Link:
         self.changes = 0            # frames that changed pixels
         self.live = False
         self.taken = False
+        self.text_open = False      # a text field is open on the board: keys type into it
         self.lock = threading.Lock()
         self.out = queue.Queue()
         self.alive = True
@@ -614,6 +655,7 @@ class Link:
 
     def disconnect(self):
         self.audio_capable = False
+        self.text_open = False
         self.led = 0
         while not self.audio.empty():
             try:
@@ -755,6 +797,8 @@ class Link:
                             self.fb = np.zeros((info["h"], info["w"]), "<u2")
                             self.seen = np.zeros((info["h"], info["w"]), bool)
                         self.audio_capable = bool(info.get("audio", False))
+                        self.text_open = False
+                        self.send(b"O")               # this viewer types: the board says when a field opens
                         self.have_board = True
                         self.on_board(info)
                         self.status("")
@@ -771,6 +815,8 @@ class Link:
                             self.on_frame()
                     elif kind in (b"L", b"A"):
                         self.extra(msg)
+                    elif kind == b"O" and len(msg) == 2 and msg[1] <= 1:
+                        self.text_open = bool(msg[1])
                     elif kind == b"T":
                         self.taken = True
                         self.status("another viewer took the screen")
@@ -1852,6 +1898,15 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             return self.devs[0]
 
         def keyPressEvent(self, e):
+            d = self.device_under_mouse()
+            edits = {Qt.Key.Key_Backspace: "Backspace", Qt.Key.Key_Delete: "Delete",
+                     Qt.Key.Key_Left: "Left", Qt.Key.Key_Right: "Right", Qt.Key.Key_Return: "Enter",
+                     Qt.Key.Key_Enter: "Enter", Qt.Key.Key_Escape: "Escape"}
+            paste = app.clipboard().text() if d.link.text_open and e.matches(QKeySequence.StandardKey.Paste) else None
+            modified = bool(e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
+            if route_text_key(d.link, edits.get(e.key()), e.text(), paste=paste, modified=modified):
+                e.accept()
+                return
             role = KEY_ROLES.get(e.key())
             mods = e.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier |
                                     Qt.KeyboardModifier.AltModifier)

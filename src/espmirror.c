@@ -137,6 +137,11 @@ static volatile uint8_t s_led_mode, s_led_sent = 0xFF;   /* the LED as driven; w
 static int s_tap_key;          /* a key tapped from the viewer, let go at s_tap_until */
 static int64_t s_tap_until;
 static unsigned s_held;        /* keys the viewer holds down, a bit per code */
+#define TEXT_Q 32
+static QueueHandle_t s_text_in;      /* the viewer's typing, for the UI task */
+static volatile bool s_text_field;   /* a text field is open, as the UI task last said */
+static bool s_text_viewer;           /* mirror task: this viewer types (it sent 'O') */
+static int s_text_sent = -1;         /* mirror task: what this viewer was last told */
 
 #if CONFIG_ESPMIRROR_AUDIO
 /* Audio for the viewer: a ring the audio path writes (s_aud_w bytes so far)
@@ -268,6 +273,35 @@ void espmirror_set_led(uint8_t mode) {
 
 bool espmirror_connected(void) {
     return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0;
+}
+
+void espmirror_text_open(bool open) {
+    __atomic_store_n(&s_text_field, open, __ATOMIC_RELAXED);
+}
+
+bool espmirror_text_read(espmirror_text_t *out) {
+    memset(out, 0, sizeof(*out));
+    return s_text_in && xQueueReceive(s_text_in, out, 0) == pdTRUE;
+}
+
+/* Mirror task: a new viewer, or none, starts without typing pending. */
+static void text_reset(void) {
+    s_text_viewer = false;
+    s_text_sent = -1;
+    if (s_text_in) xQueueReset(s_text_in);
+}
+
+/* Mirror task: whether a field is open, to a viewer that types, when it changed. */
+static void text_pump(void) {
+    if (!viewer_on() || !s_text_viewer) return;
+    bool open = __atomic_load_n(&s_text_field, __ATOMIC_RELAXED);
+    if (open == s_text_sent) return;
+    uint8_t msg[2] = {'O', open};
+    if (viewer_send(msg, 2, SEND_MS)) {
+        s_text_sent = open;
+    } else {
+        viewer_drop();
+    }
 }
 
 /* Mirror task: the LED's state to the viewer when it changed since it was last told. */
@@ -482,6 +516,20 @@ static void keys_release(void) {
 
 /* A message from the viewer. */
 static void input(const uint8_t *buf, size_t len) {
+    if (len == 1 && buf[0] == 'O') {   /* this viewer types, and hears when a field opens */
+        s_text_viewer = true;
+        s_text_sent = -1;
+        return;
+    }
+    espmirror_text_t text;
+    if (espmirror_core_text(buf, len, &text.edit, text.text)) {
+        /* With no field open the typing has nowhere to go; a full queue means the UI task stalled. */
+        bool ok = !__atomic_load_n(&s_text_field, __ATOMIC_RELAXED)
+                  || xQueueSend(s_text_in, &text, pdMS_TO_TICKS(SEND_MS)) == pdTRUE;
+        memset(&text, 0, sizeof(text));
+        if (!ok) viewer_drop();
+        return;
+    }
     if (len == 1 && buf[0] == 'R') {
         refresh();
         if (!viewer_send(s_board, s_board_len, SEND_MS)) viewer_drop();
@@ -524,6 +572,7 @@ static void input(const uint8_t *buf, size_t len) {
 static void tcp_drop(void) {
     if (s_cfd < 0) return;
     keys_release();
+    text_reset();
     pointer_put(s_ptr_x, s_ptr_y, false);
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
@@ -598,6 +647,7 @@ static void tcp_admit(int fd) {
         return;
     }
     s_led_sent = 0xFF;                     /* the new viewer gets the LED's state at once */
+    text_reset();
     refresh();
     ESP_LOGI(TAG, "viewer connected");
     if (s_cfg.on_viewer) s_cfg.on_viewer(true, s_cfg.user);
@@ -720,6 +770,7 @@ static void serial_end(void)
 {
     if (!s_serial) return;
     keys_release();
+    text_reset();
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
     talk_set(false);
@@ -736,6 +787,7 @@ static void serial_admit(void)
     if (s_cfd >= 0) { tcp_send(s_cfd, "T", 1, NULL, 0, 500); tcp_drop(); }
     s_serial = true;
     s_led_sent = 0xff;
+    text_reset();
     if (s_cfg.on_viewer) s_cfg.on_viewer(true, s_cfg.user);
     if (!viewer_send(s_board, s_board_len, SEND_MS)) {
         serial_end();
@@ -885,6 +937,7 @@ static void mirror_task(void *arg) {
         serial_pump();
         if (s_tap_until && esp_timer_get_time() > s_tap_until) tap_end();
         led_pump();
+        text_pump();
 #if CONFIG_ESPMIRROR_AUDIO
         audio_pump();
 #endif
@@ -969,6 +1022,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #endif
     if (!espmirror_core_init_ex(&s_core, s_w, s_h, flags, s_previous)) return ESP_ERR_NO_MEM;
     s_serial_in = xQueueCreate(SERIAL_QUEUE, sizeof(serial_msg_t));
+    s_text_in = xQueueCreate(TEXT_Q, sizeof(espmirror_text_t));
     s_serial_tx = xSemaphoreCreateMutex();
     s_serial_done = xSemaphoreCreateBinary();
     SemaphoreHandle_t lock = xSemaphoreCreateMutex();
@@ -989,7 +1043,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
 #endif
     esp_err_t err = ESP_OK;
     const char *fail = NULL;
-    if (!lock || !fb || !msg || !in || !audio_ok || !s_serial_in || !s_serial_tx || !s_serial_done) {
+    if (!lock || !fb || !msg || !in || !audio_ok || !s_serial_in || !s_serial_tx || !s_serial_done || !s_text_in) {
         fail = "no memory for the screen copy";
         err = ESP_ERR_NO_MEM;
     }
@@ -1061,7 +1115,8 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         if (s_serial_in) vQueueDelete(s_serial_in);
         if (s_serial_tx) vSemaphoreDelete(s_serial_tx);
         if (s_serial_done) vSemaphoreDelete(s_serial_done);
-        s_serial_in = NULL; s_serial_tx = NULL; s_serial_done = NULL;
+        if (s_text_in) vQueueDelete(s_text_in);
+        s_serial_in = NULL; s_serial_tx = NULL; s_serial_done = NULL; s_text_in = NULL;
         heap_caps_free(s_previous); s_previous = NULL;
         espmirror_usb_uninstall();
         return err;

@@ -113,6 +113,9 @@ class Pattern:
         self.audio_at = 0
         self.led_sent = None
         self.taps = {}
+        self.typer = False          # the viewer asked to hear about the text field ('O')
+        self.field = ''             # the one text field, always open for a viewer that types
+        self.field_sent = None
         self.yy, self.xx = np.indices((info['h'], info['w']))
 
     def release(self):
@@ -123,9 +126,19 @@ class Pattern:
         self.talk = False
         self.led_sent = None
         self.taps.clear()
+        self.typer = False
+        self.field_sent = None
 
     def input(self, msg, now):
-        if len(msg) == 2 and msg[0] == 7 and msg[1] <= 2:
+        if msg == b'O':
+            self.typer, self.field_sent = True, None
+        elif self.typer and 1 < len(msg) <= 64 and msg[:1] == b'I':
+            self.field += msg[1:].decode('utf-8')
+        elif self.typer and len(msg) == 2 and msg[:1] == b'K' and msg[1] == 1:
+            self.field = self.field[:-1]
+        elif self.typer and len(msg) == 2 and msg[:1] == b'K' and msg[1] == 5:
+            self.field = ''
+        elif len(msg) == 2 and msg[0] == 7 and msg[1] <= 2:
             self.listen = msg[1]
         elif len(msg) == 2 and msg[0] == 8:
             self.talk = bool(msg[1])
@@ -143,6 +156,9 @@ class Pattern:
                 self.trail = self.trail[-128:]
 
     def extras(self, now, period):
+        if self.typer and self.field_sent is None:
+            self.field_sent = 1
+            yield b'O\x01'
         mode = int(now) % 4
         if mode != self.led_sent:
             self.led_sent = mode

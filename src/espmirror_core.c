@@ -268,3 +268,30 @@ size_t espmirror_core_build(espmirror_core_t *c, const uint16_t *fb,
     return len;
 }
 
+
+bool espmirror_core_text(const uint8_t *buf, size_t len, uint8_t *edit, char text[64])
+{
+    memset(text, 0, 64);
+    *edit = 0;
+    if (len == 2 && buf[0] == 'K' && buf[1] >= 1 && buf[1] <= 5) {
+        *edit = buf[1];
+        return true;
+    }
+    if (len < 2 || len > 64 || buf[0] != 'I') return false;
+    for (size_t i = 1; i < len;) {
+        uint32_t c = buf[i++], min = 0;
+        unsigned more = 0;
+        if (c >= 0xC2 && c <= 0xDF) { c &= 31; more = 1; min = 0x80; }
+        else if (c >= 0xE0 && c <= 0xEF) { c &= 15; more = 2; min = 0x800; }
+        else if (c >= 0xF0 && c <= 0xF4) { c &= 7; more = 3; min = 0x10000; }
+        else if (c >= 0x80 || !c) return false;
+        if (i + more > len) return false;
+        while (more--) {
+            if ((buf[i] & 0xC0) != 0x80) return false;
+            c = c << 6 | (buf[i++] & 63);
+        }
+        if (c < min || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) return false;
+    }
+    memcpy(text, buf + 1, len - 1);
+    return true;
+}

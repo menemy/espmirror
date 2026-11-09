@@ -102,6 +102,25 @@ esp_err_t espmirror_serial_session(void);
  * own input driver may use this too. Returns true when more samples remain. */
 bool espmirror_pointer_read(int *x, int *y, bool *down);
 
+/* Typing from the viewer into a text field on the board. The LVGL adapter
+ * does it for a focused, visible textarea. Without it, the UI task says
+ * whether a field is open (the viewer types only while one is) and takes the
+ * edits in order; text is UTF-8, NUL-terminated, for an insert only. */
+#define ESPMIRROR_TEXT_INSERT    0
+#define ESPMIRROR_TEXT_BACKSPACE 1
+#define ESPMIRROR_TEXT_DELETE    2
+#define ESPMIRROR_TEXT_LEFT      3
+#define ESPMIRROR_TEXT_RIGHT     4
+#define ESPMIRROR_TEXT_ENTER     5
+
+typedef struct {
+    uint8_t edit;
+    char text[64];
+} espmirror_text_t;
+
+void espmirror_text_open(bool open);
+bool espmirror_text_read(espmirror_text_t *out);
+
 /* The screen copy to draw into, locked until espmirror_frame_end(); NULL
  * before espmirror_start(). Tell what changed, in pixels; the viewer gets it
  * on the next frame. Any task. */

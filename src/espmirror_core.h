@@ -53,3 +53,7 @@ bool espmirror_core_pending(const espmirror_core_t *c);
  * Returns 0 without consuming dirt if capacity cannot hold one raw row. */
 size_t espmirror_core_build(espmirror_core_t *c, const uint16_t *fb,
                               uint8_t *out, size_t capacity, uint8_t state);
+/* The viewer's typing: 'K' edit:u8 (1..5), or 'I' and 1..63 bytes of whole
+ * UTF-8 characters without NUL. *edit 0 is an insert, its text NUL-terminated
+ * in text[64]. False, with text cleared, for anything else. */
+bool espmirror_core_text(const uint8_t *buf, size_t len, uint8_t *edit, char text[64]);

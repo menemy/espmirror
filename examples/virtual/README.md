@@ -4,7 +4,9 @@
 
 A bare ESP32-S3 runs LVGL 9.5; the desktop mirror is its display and touch
 input. No panel, codec or Wi-Fi setup. The first page has an animated bar
-and a counter. Swipe left to a scrolling list; swipe right to return.
+and a counter. Swipe left to a scrolling list, and again to a text field
+with LVGL's keyboard: tap the field and type on the computer, or on the
+keyboard on the screen. Enter moves the line under the field.
 Tap a button, press BOOT on the module, or click the viewer's BOOT key to
 increment the counter. The keyboard's 2 key does the same.
 

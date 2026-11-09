@@ -30,7 +30,7 @@
 #define H CONFIG_VIRTUAL_HEIGHT
 
 static QueueHandle_t s_keys;
-static lv_obj_t *s_pages, *s_count;
+static lv_obj_t *s_pages, *s_count, *s_typed;
 static unsigned s_presses;
 static uint8_t s_draw[W * 24 * 2] __attribute__((aligned(LV_DRAW_BUF_ALIGN)));
 
@@ -76,6 +76,13 @@ static void clicked(lv_event_t *event) {
     count_press();
 }
 
+/* Enter, or the keyboard's OK: the line moves under the field. */
+static void typed(lv_event_t *event) {
+    lv_obj_t *field = lv_event_get_target(event);
+    lv_label_set_text(s_typed, lv_textarea_get_text(field));
+    lv_textarea_set_text(field, "");
+}
+
 static void bar_value(void *bar, int32_t value) {
     lv_bar_set_value(bar, value, LV_ANIM_OFF);
 }
@@ -90,9 +97,11 @@ static void build_ui(void) {
     lv_obj_set_size(s_pages, W, H);
     lv_obj_set_style_bg_opa(s_pages, LV_OPA_TRANSP, 0);
     lv_obj_t *home = lv_tileview_add_tile(s_pages, 0, 0, LV_DIR_RIGHT);
-    lv_obj_t *page = lv_tileview_add_tile(s_pages, 1, 0, LV_DIR_LEFT);
+    lv_obj_t *page = lv_tileview_add_tile(s_pages, 1, 0, LV_DIR_HOR);
+    lv_obj_t *typing = lv_tileview_add_tile(s_pages, 2, 0, LV_DIR_LEFT);
     lv_obj_remove_flag(home, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(typing, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(home);
     lv_label_set_text(title, "espmirror");
@@ -133,6 +142,21 @@ static void build_ui(void) {
         lv_label_set_text_fmt(label, "Item %u", i + 1);
         lv_obj_center(label);
     }
+
+    /* Tap the field, then type on the computer: the viewer sends the keys while it is focused. */
+    lv_obj_t *field = lv_textarea_create(typing);
+    lv_textarea_set_one_line(field, true);
+    lv_textarea_set_placeholder_text(field, "Tap, then type");
+    lv_obj_set_width(field, W - W / 8);
+    lv_obj_align(field, LV_ALIGN_TOP_MID, 0, H / 16);
+    lv_obj_add_event_cb(field, typed, LV_EVENT_READY, NULL);
+    s_typed = lv_label_create(typing);
+    lv_label_set_text(s_typed, "");
+    lv_obj_align(s_typed, LV_ALIGN_TOP_MID, 0, H / 16 + 44);
+    lv_obj_t *keys = lv_keyboard_create(typing);
+    lv_obj_set_size(keys, W, H / 2);
+    lv_obj_align(keys, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(keys, field);
 }
 
 #if CONFIG_VIRTUAL_WIFI
@@ -220,7 +244,7 @@ void app_main(void) {
     lv_display_set_flush_cb(display, flush);
     ESP_ERROR_CHECK(espmirror_attach_lvgl(display));
     build_ui();
-    ESP_LOGI("virtual", "mirror ready; swipe sideways for the list, BOOT or Tap counts presses");
+    ESP_LOGI("virtual", "mirror ready; swipe sideways for a list and a text field, BOOT or Tap counts presses");
     for (;;) {
         boot_poll(tick_ms());
         int key;

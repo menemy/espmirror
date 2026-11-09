@@ -62,6 +62,74 @@ static void pointer_read(lv_indev_t *indev, lv_indev_data_t *data) {
     data->state = down ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
+#if LV_USE_TEXTAREA
+/* The focused, visible textarea under obj; with ta, the visible keyboard typing into ta. */
+static lv_obj_t *text_find(lv_obj_t *obj, lv_obj_t *ta) {
+    if (!obj || !lv_obj_is_visible(obj)) return NULL;
+    if (!ta && lv_obj_check_type(obj, &lv_textarea_class) && lv_obj_has_state(obj, LV_STATE_FOCUSED)) return obj;
+#if LV_USE_KEYBOARD
+    if (ta && lv_obj_check_type(obj, &lv_keyboard_class) && lv_keyboard_get_textarea(obj) == ta) return obj;
+#endif
+    for (uint32_t i = 0; i < lv_obj_get_child_count(obj); i++) {
+        lv_obj_t *found = text_find(lv_obj_get_child(obj, i), ta);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+static lv_obj_t *text_on_display(lv_display_t *disp, lv_obj_t *ta) {
+    lv_obj_t *found = text_find(lv_display_get_layer_top(disp), ta);
+    return found ? found : text_find(lv_display_get_screen_active(disp), ta);
+}
+
+/* Enter as the field's own keyboard would take it: its OK key, or a new line
+ * unless the field is one line, which then reports it is done. */
+static void text_enter(lv_display_t *disp, lv_obj_t *ta) {
+#if LV_USE_KEYBOARD
+    lv_obj_t *kb = text_on_display(disp, ta);
+    if (kb) {
+        if (lv_obj_send_event(kb, LV_EVENT_READY, NULL) == LV_RESULT_OK && (ta = lv_keyboard_get_textarea(kb))) {
+            lv_obj_send_event(ta, LV_EVENT_READY, NULL);
+        }
+        return;
+    }
+#else
+    (void)disp;
+#endif
+    if (lv_textarea_get_one_line(ta)) lv_obj_send_event(ta, LV_EVENT_READY, NULL);
+    else lv_textarea_add_char(ta, '\n');
+}
+
+/* In LVGL's task, like every LVGL call: whether a field is open, and the
+ * viewer's typing into it. No tree walks while nobody watches. */
+static void text_timer(lv_timer_t *timer) {
+    lv_display_t *disp = lv_timer_get_user_data(timer);
+    bool watched = espmirror_connected();
+    lv_timer_set_period(timer, watched ? 20 : 250);
+    if (!watched) {
+        espmirror_text_open(false);
+        return;
+    }
+    for (int i = 0; i < 8; i++) {
+        lv_obj_t *ta = text_on_display(disp, NULL);
+        espmirror_text_open(ta != NULL);
+        espmirror_text_t m;
+        if (!espmirror_text_read(&m)) break;
+        if (ta) {
+            switch (m.edit) {
+            case ESPMIRROR_TEXT_INSERT: lv_textarea_add_text(ta, m.text); break;
+            case ESPMIRROR_TEXT_BACKSPACE: lv_textarea_delete_char(ta); break;
+            case ESPMIRROR_TEXT_DELETE: lv_textarea_delete_char_forward(ta); break;
+            case ESPMIRROR_TEXT_LEFT: lv_textarea_cursor_left(ta); break;
+            case ESPMIRROR_TEXT_RIGHT: lv_textarea_cursor_right(ta); break;
+            case ESPMIRROR_TEXT_ENTER: text_enter(disp, ta); break;
+            }
+        }
+        memset(&m, 0, sizeof(m));
+    }
+}
+#endif
+
 esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
     if (!disp) disp = lv_display_get_default();
     if (!disp) return ESP_ERR_INVALID_STATE;
@@ -78,6 +146,9 @@ esp_err_t espmirror_attach_lvgl(lv_display_t *disp) {
     lv_indev_set_display(pointer, disp);
     lv_indev_set_read_cb(pointer, pointer_read);
     lv_display_add_event_cb(disp, flush_start, LV_EVENT_FLUSH_START, NULL);
+#if LV_USE_TEXTAREA
+    if (!lv_timer_create(text_timer, 250, disp)) return ESP_ERR_NO_MEM;
+#endif
     lv_obj_invalidate(lv_display_get_screen_active(disp));   /* the whole screen once, for the copy */
     ESP_LOGI(TAG, "on the LVGL flush");
     return ESP_OK;

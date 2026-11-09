@@ -9,8 +9,14 @@
 enum { LV_COLOR_FORMAT_RGB565, LV_COLOR_FORMAT_RGB565_SWAPPED, LV_DISPLAY_RENDER_MODE_PARTIAL,
        LV_INDEV_TYPE_POINTER, LV_INDEV_STATE_PRESSED, LV_INDEV_STATE_RELEASED,
        LV_EVENT_FLUSH_START, LV_EVENT_CLICKED, LV_ANIM_OFF, LV_ANIM_REPEAT_INFINITE,
-       LV_OPA_TRANSP, LV_OBJ_FLAG_SCROLLABLE, LV_DIR_LEFT, LV_DIR_RIGHT,
-       LV_ALIGN_TOP_MID, LV_ALIGN_CENTER };
+       LV_OPA_TRANSP, LV_OBJ_FLAG_SCROLLABLE, LV_DIR_LEFT, LV_DIR_RIGHT, LV_DIR_HOR,
+       LV_ALIGN_TOP_MID, LV_ALIGN_CENTER, LV_ALIGN_BOTTOM_MID, LV_STATE_FOCUSED, LV_EVENT_READY,
+       LV_RESULT_OK };
+#define LV_USE_TEXTAREA 1
+#define LV_USE_KEYBOARD 1
+typedef struct lv_timer lv_timer_t;
+typedef struct lv_obj_class lv_obj_class_t;
+extern const lv_obj_class_t lv_textarea_class, lv_keyboard_class;
 typedef struct lv_obj lv_obj_t;
 typedef struct lv_display lv_display_t;
 typedef struct lv_event lv_event_t;
@@ -74,3 +80,28 @@ void lv_anim_set_duration(lv_anim_t *, unsigned);
 void lv_anim_set_playback_duration(lv_anim_t *, unsigned);
 void lv_anim_set_repeat_count(lv_anim_t *, unsigned);
 void lv_anim_start(lv_anim_t *);
+lv_timer_t *lv_timer_create(void (*)(lv_timer_t *), uint32_t, void *);
+void *lv_timer_get_user_data(lv_timer_t *);
+void lv_timer_set_period(lv_timer_t *, uint32_t);
+bool lv_obj_is_visible(const lv_obj_t *);
+bool lv_obj_check_type(const lv_obj_t *, const lv_obj_class_t *);
+bool lv_obj_has_state(const lv_obj_t *, int);
+uint32_t lv_obj_get_child_count(const lv_obj_t *);
+lv_obj_t *lv_obj_get_child(const lv_obj_t *, int32_t);
+lv_obj_t *lv_display_get_layer_top(lv_display_t *);
+int lv_obj_send_event(lv_obj_t *, int, void *);
+lv_obj_t *lv_textarea_create(lv_obj_t *);
+void lv_textarea_set_one_line(lv_obj_t *, bool);
+bool lv_textarea_get_one_line(const lv_obj_t *);
+void lv_textarea_set_placeholder_text(lv_obj_t *, const char *);
+void lv_textarea_set_text(lv_obj_t *, const char *);
+const char *lv_textarea_get_text(const lv_obj_t *);
+void lv_textarea_add_text(lv_obj_t *, const char *);
+void lv_textarea_add_char(lv_obj_t *, uint32_t);
+void lv_textarea_delete_char(lv_obj_t *);
+void lv_textarea_delete_char_forward(lv_obj_t *);
+void lv_textarea_cursor_left(lv_obj_t *);
+void lv_textarea_cursor_right(lv_obj_t *);
+lv_obj_t *lv_keyboard_create(lv_obj_t *);
+void lv_keyboard_set_textarea(lv_obj_t *, lv_obj_t *);
+lv_obj_t *lv_keyboard_get_textarea(const lv_obj_t *);

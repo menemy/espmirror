@@ -108,6 +108,7 @@ remap these numbers. Applications should supply button labels and positions.
 | A | source:u8 (1 mic, 2 speaker), PCM16 signed mono 16000 Hz |
 | T | no body; another viewer took ownership |
 | E | no body; cable session ended |
+| O | open:u8: 1 while a text field is open on the board, else 0 |
 
 F state is 0 bright, 1 dim, 2 dark. Empty F heartbeats carry state each second.
 LED state is sent when changed and on admission. A normally contains 1280 PCM
@@ -159,12 +160,37 @@ configurable 8..64 KiB; TCP host limit is 1 MiB. A send deadline is three second
 | 08 enabled:u8 | request talk through the speaker |
 | S 01 PCM | signed PCM16 mono 16000 Hz, at most 320 samples (20 ms) |
 | R | reset reference and refresh entire screen |
+| O | this viewer types: report text fields with O |
+| I UTF-8 | insert 1..63 bytes of whole UTF-8 characters, no NUL, at the field's cursor |
+| K edit:u8 | 1 Backspace, 2 Delete, 3 Left, 4 Right, 5 Enter |
 
 The application may refuse talk. There is no talk-acceptance response in this
 version; an accepted session calls on_talk_audio. Disconnect stops listen/talk,
 releases held keys, and queues pointer release. Pointer press, first movement,
 and release are separate LVGL samples; later motion samples may coalesce.
 Out-of-range coordinates and unknown payloads have no input action.
+
+## Typing into a text field
+
+A viewer that types sends `O` after each `B`. Until then the board sends it no
+`O`, so viewers that do not type never see one, and boards that do not know
+`O` ignore it. The board then sends `O` with the current state and again on
+every change. While a field is open the viewer sends printable keys (digits
+included), Backspace, Delete, Left, Right, Enter and a paste (Cmd/Ctrl+V,
+split at character boundaries) to the board under the mouse, as `I` and `K`;
+with no field open the keys press the board's buttons as before. Esc is taken while a
+field is open and does nothing. The viewer logs no typed or pasted text.
+
+The board drops `I` and `K` while no field is open, and malformed ones always.
+They wait in a queue of 32 for the UI task; a full queue for three seconds
+ends the session, and a new or departing viewer empties it. The LVGL adapter
+looks for a visible focused textarea on the top layer, then on the active
+screen, every 20 ms while a viewer is connected. It inserts with LVGL's own
+accepted-character and length rules. Enter sends `LV_EVENT_READY` to a visible
+keyboard attached to the field and then to the field, as the keyboard's OK
+key does; without one, a one-line field gets `LV_EVENT_READY` and others a new
+line. An application without LVGL calls `espmirror_text_open()` and
+`espmirror_text_read()` from its UI task.
 
 ## Changes from espmirror version 1
 

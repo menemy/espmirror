@@ -649,6 +649,18 @@ class CableLinkTests(unittest.TestCase):
         link.thread.join(3)
         self.eventually(lambda: not server.pattern.listen and not server.pattern.talk)
 
+    def test_typing_into_the_board_field(self):
+        server = self.start_fake(corrupt_every=0)
+        link = self.start_link(server)
+        self.eventually(lambda: link.live and link.text_open)
+        self.assertTrue(server.pattern.typer)
+        self.assertTrue(mirror.route_text_key(link, None, 'h\u00e9llo'))
+        self.assertTrue(mirror.route_text_key(link, 'Backspace'))
+        self.eventually(lambda: server.pattern.field == 'h\u00e9ll')
+        link.close()
+        link.thread.join(3)
+        self.assertFalse(link.text_open)
+
     def test_end_reconnect_and_no_input_becomes_console_commands(self):
         server = self.start_fake(corrupt_every=0)
         link = self.start_link(server)
@@ -915,5 +927,45 @@ class SerialTests(unittest.TestCase):
                 mirror.keep_serial_lines_on_close(SimpleNamespace(fileno=lambda: 17))
 
 
+
+class TextInputTests(unittest.TestCase):
+    def test_field_routing_digits_edits_paste(self):
+        link = mirror.Link('localhost')
+        self.assertFalse(mirror.route_text_key(link, None, '1'))
+        self.assertTrue(link.out.empty())
+        link.text_open = True
+        self.assertTrue(mirror.route_text_key(link, None, '1234'))
+        self.assertEqual(link.out.get_nowait(), b'I1234')
+        for key, code in mirror.TEXT_EDITS.items():
+            self.assertTrue(mirror.route_text_key(link, key))
+            self.assertEqual(link.out.get_nowait(), bytes((ord('K'), code)))
+        text = 'token-\u00e9\U0001f642' * 50
+        self.assertTrue(mirror.route_text_key(link, None, paste=text, modified=True))
+        chunks = []
+        while not link.out.empty():
+            msg = link.out.get_nowait()
+            self.assertLessEqual(len(msg), 64)
+            chunks.append(msg[1:].decode('utf-8'))
+        self.assertEqual(''.join(chunks), text)
+        self.assertTrue(mirror.route_text_key(link, 'Escape'))
+        self.assertTrue(link.out.empty())
+        self.assertFalse(mirror.route_text_key(link, None, 's', modified=True))
+        self.assertFalse(mirror.route_text_key(link, None, '\x07'))
+        link.disconnect()
+        self.assertFalse(mirror.route_text_key(link, None, paste=text, modified=True))
+
+    def test_firmware_text_parser(self):
+        with tempfile.TemporaryDirectory() as folder:
+            exe = Path(folder) / 'text-harness'
+            result = subprocess.run(shlex.split(os.environ.get('CC', 'cc')) + [
+                '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                '-I' + str(ROOT / 'src'), str(ROOT / 'src/espmirror_core.c'),
+                str(ROOT / 'tests/espmirror_text_harness.c'), '-o', str(exe)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([exe], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+
 if __name__ == '__main__':
     unittest.main()
+

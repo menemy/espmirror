@@ -30,6 +30,9 @@ goes into the bug report.
 - **Keys and touch**: the viewer's drawn buttons and the keyboard press the
   board's buttons, tapped or held; the mouse on the glass is a touch. The
   firmware gets a callback for each.
+- **Typing**: while a text field is open on the board, the computer's
+  keyboard types into it, paste included. The LVGL hook finds the focused
+  textarea by itself.
 - **LED**: the board reports it, the viewer lights it on the body.
 - **Audio**: the viewer hears the board's speaker (clicks, cues, replies) or
   its microphone, and can talk into the board's speaker. Off at build time
@@ -188,7 +191,8 @@ Drag by the body or the handle at the bottom left, resize by the one at
 the bottom right. The View menu: Screenshot (Cmd S), Record (Cmd R), Sound (Cmd L),
 Mic (Cmd Shift L), Talk (Cmd K), Bigger, Smaller, Actual size (Cmd 0),
 Float on Top (Cmd T). Use Ctrl on Windows/Linux. The keys 1 through 4 press
-board buttons, with arrows/Enter/Escape for navigation. Several boards share a
+board buttons, with arrows/Enter/Escape for navigation; while a text field is
+open on the board under the mouse, the keys type into it instead. Several boards share a
 window. Click a board before using the shared audio toolbar. The listen button
 selects its speaker; Ctrl+Shift+L selects its microphone. Talk toggles your
 microphone; the board may refuse it. OS microphone permission is required.

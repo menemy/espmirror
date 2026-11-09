@@ -48,6 +48,7 @@ QueueHandle_t xQueueCreate(int, size_t);
 int xQueueSend(QueueHandle_t, const void *, int);
 int xQueueReceive(QueueHandle_t, void *, int);
 void vQueueDelete(QueueHandle_t);
+int xQueueReset(QueueHandle_t);
 void vTaskDelay(int);
 void vTaskDelete(TaskHandle_t);
 int xTaskCreate(void (*)(void *), const char *, int, void *, int, TaskHandle_t *);
