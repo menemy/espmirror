@@ -3,27 +3,61 @@
 menu "Virtual display"
     depends on IDF_TARGET_ESP32S3
 
+    choice VIRTUAL_DEVICE
+        prompt "Device"
+        default VIRTUAL_DEVICE_CUSTOM
+        help
+            A device the viewer has a profile for: its screen's size and shape,
+            touch or not, its keys, and a name that makes the viewer draw its
+            body at its real size. Screens bigger than 240 x 240 need PSRAM
+            (sdkconfig.psram).
+
+        config VIRTUAL_DEVICE_CUSTOM
+            bool "Your own: width, height, shape, diagonal and name below"
+        config VIRTUAL_DEVICE_WAVESHARE_216
+            bool "Waveshare ESP32-S3-Touch-AMOLED-2.16 (480 x 480)"
+        config VIRTUAL_DEVICE_WAVESHARE_154G
+            bool "Waveshare ESP32-S3 e-Paper 1.54G (200 x 200, keys only)"
+        config VIRTUAL_DEVICE_WAVESHARE_175C
+            bool "Waveshare ESP32-S3-Touch-AMOLED-1.75C (466 x 466, round)"
+        config VIRTUAL_DEVICE_WAVESHARE_349
+            bool "Waveshare ESP32-S3-Touch-LCD-3.49 (172 x 640)"
+        config VIRTUAL_DEVICE_WAVESHARE_P4_35
+            bool "Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 (480 x 320)"
+        config VIRTUAL_DEVICE_AIPI_LITE
+            bool "XOrigin AIPI Lite (128 x 128, keys only)"
+        config VIRTUAL_DEVICE_ESP_MOSAICO
+            bool "Espressif ESP-Mosaico (480 x 480)"
+        config VIRTUAL_DEVICE_SENSECAP_WATCHER
+            bool "Seeed SenseCAP Watcher (412 x 412, round)"
+    endchoice
+
     config VIRTUAL_WIDTH
         int "Width in pixels"
+        depends on VIRTUAL_DEVICE_CUSTOM
         range 128 640
         default 240
 
     config VIRTUAL_HEIGHT
         int "Height in pixels"
+        depends on VIRTUAL_DEVICE_CUSTOM
         range 128 640
         default 240
 
     config VIRTUAL_ROUND
         bool "Round screen"
+        depends on VIRTUAL_DEVICE_CUSTOM
         default n
 
     config VIRTUAL_DIAGONAL_100
         int "Diagonal in hundredths of an inch (200 = 2.00 inches)"
+        depends on VIRTUAL_DEVICE_CUSTOM
         range 0 2000
         default 200
 
     config VIRTUAL_NAME
         string "Name shown in the viewer"
+        depends on VIRTUAL_DEVICE_CUSTOM
         default "Virtual ESP32-S3"
 
     config VIRTUAL_BOOT_GPIO

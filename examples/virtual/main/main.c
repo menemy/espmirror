@@ -26,8 +26,91 @@
 #error "The virtual example uses the ESP32-S3 native USB port"
 #endif
 
+/* The device Kconfig picks: its screen, touch or not, its keys and a name that
+ * makes the viewer draw its profile's body. Keys at (-1, -1) go where that body
+ * has them; others are pixel hints, drawn at the nearest edge. */
+#define AT_BODY(key, label) { .role = (key), .name = (label), .x = -1, .y = -1 }
+#define AS_MOSAICO { { .role = ESPMIRROR_KEY_MAIN, .name = "BOOT", .x = W / 2 - W / 5, .y = H - 1 }, \
+                     { .role = ESPMIRROR_KEY_POWER, .name = "POWER", .x = W / 2 + W / 5, .y = H - 1 }, \
+                     { .role = ESPMIRROR_KEY_AUX, .name = "FN", .x = W * 4 / 5, .y = 0 } }
+#if CONFIG_VIRTUAL_DEVICE_WAVESHARE_216
+#define W 480
+#define H 480
+#define ROUND false
+#define TOUCH true
+#define DIAGONAL 2.16f
+#define NAME "Virtual Waveshare 2.16"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_AUX, "KEY"), AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT"), \
+               AT_BODY(ESPMIRROR_KEY_POWER, "PWR") }
+#elif CONFIG_VIRTUAL_DEVICE_WAVESHARE_154G
+#define W 200
+#define H 200
+#define ROUND false
+#define TOUCH false
+#define DIAGONAL 1.54f
+#define NAME "Virtual Waveshare 1.54G"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT"), AT_BODY(ESPMIRROR_KEY_POWER, "PWR") }
+#elif CONFIG_VIRTUAL_DEVICE_WAVESHARE_175C
+#define W 466
+#define H 466
+#define ROUND true
+#define TOUCH true
+#define DIAGONAL 1.75f
+#define NAME "Virtual Waveshare 1.75C"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_AUX, "KEY"), AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT") }
+#elif CONFIG_VIRTUAL_DEVICE_WAVESHARE_349
+#define W 172
+#define H 640
+#define ROUND false
+#define TOUCH true
+#define DIAGONAL 3.49f
+#define NAME "Virtual Waveshare 3.49"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT"), AT_BODY(ESPMIRROR_KEY_POWER, "PWR") }
+#elif CONFIG_VIRTUAL_DEVICE_WAVESHARE_P4_35
+#define W 480
+#define H 320
+#define ROUND false
+#define TOUCH true
+#define DIAGONAL 3.5f
+#define NAME "Virtual Waveshare P4 3.5"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_POWER, "PWR"), AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT") }
+#elif CONFIG_VIRTUAL_DEVICE_AIPI_LITE
+#define W 128
+#define H 128
+#define ROUND false
+#define TOUCH false
+#define DIAGONAL 1.44f
+#define NAME "Virtual AIPI Lite"
+#define KEYS { AT_BODY(ESPMIRROR_KEY_POWER, "PWR"), AT_BODY(ESPMIRROR_KEY_MAIN, "BOOT") }
+#elif CONFIG_VIRTUAL_DEVICE_ESP_MOSAICO
+#define W 480
+#define H 480
+#define ROUND false
+#define TOUCH true
+#define DIAGONAL 2.16f
+#define NAME "Virtual ESP-Mosaico"
+#define KEYS AS_MOSAICO
+#elif CONFIG_VIRTUAL_DEVICE_SENSECAP_WATCHER
+#define W 412
+#define H 412
+#define ROUND true
+#define TOUCH true
+#define DIAGONAL 1.45f
+#define NAME "Virtual SenseCAP Watcher"
+#define KEYS { { .role = ESPMIRROR_KEY_AUX, .name = "WHEEL", .x = 306, .y = 63 }, AT_BODY(ESPMIRROR_KEY_MAIN, "SCROLL") }
+#else
 #define W CONFIG_VIRTUAL_WIDTH
 #define H CONFIG_VIRTUAL_HEIGHT
+#ifdef CONFIG_VIRTUAL_ROUND
+#define ROUND CONFIG_VIRTUAL_ROUND
+#else
+#define ROUND false
+#endif
+#define TOUCH true
+#define DIAGONAL (CONFIG_VIRTUAL_DIAGONAL_100 / 100.0f)
+#define NAME CONFIG_VIRTUAL_NAME
+#define KEYS AS_MOSAICO          /* three keys to start from, laid out as the ESP-Mosaico's */
+#endif
 
 static QueueHandle_t s_keys;
 static lv_obj_t *s_pages, *s_tiles[3], *s_count, *s_typed;
@@ -240,22 +323,15 @@ void app_main(void) {
     };
     ESP_ERROR_CHECK(gpio_config(&input));
 #endif
-    /* Keys the viewer draws, laid out as the ESP-Mosaico's: two either side of the middle of the bottom
-     * edge, where its USB port is, and one at one o'clock. Only BOOT is also a key on the module. */
-    const espmirror_button_t keys[] = {
-        { .role = ESPMIRROR_KEY_MAIN, .name = "BOOT", .x = W / 2 - W / 5, .y = H - 1 },
-        { .role = ESPMIRROR_KEY_POWER, .name = "POWER", .x = W / 2 + W / 5, .y = H - 1 },
-        { .role = ESPMIRROR_KEY_AUX, .name = "FN", .x = W * 4 / 5, .y = 0 },
-    };
+    /* The viewer draws these keys; only BOOT is also one on the module. */
+    const espmirror_button_t keys[] = KEYS;
     const espmirror_config_t config = {
-        .name = CONFIG_VIRTUAL_NAME,
+        .name = NAME,
         .width = W, .height = H,
-#ifdef CONFIG_VIRTUAL_ROUND
-        .round = CONFIG_VIRTUAL_ROUND,
-#endif
-        .diagonal = CONFIG_VIRTUAL_DIAGONAL_100 / 100.0f,
-        .touch = true,
-        .buttons = keys, .button_count = 3,
+        .round = ROUND,
+        .diagonal = DIAGONAL,
+        .touch = TOUCH,
+        .buttons = keys, .button_count = sizeof(keys) / sizeof(keys[0]),
         .on_key = on_key,
     };
     ESP_ERROR_CHECK(espmirror_start(&config));

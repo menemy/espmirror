@@ -39,6 +39,14 @@ class VirtualTests(unittest.TestCase):
                     '-DCONFIG_VIRTUAL_WIDTH=%d' % w, '-DCONFIG_VIRTUAL_HEIGHT=%d' % h,
                     *(['-DCONFIG_VIRTUAL_ROUND=1'] if round_ else [])])
 
+    def test_device_presets(self):
+        for device in ('WAVESHARE_216', 'WAVESHARE_154G', 'WAVESHARE_175C', 'WAVESHARE_349',
+                       'WAVESHARE_P4_35', 'AIPI_LITE', 'ESP_MOSAICO', 'SENSECAP_WATCHER'):
+            with self.subTest(device=device):
+                self.compile(ROOT / 'examples/virtual/main/main.c', [
+                    '-DCONFIG_IDF_TARGET_ESP32S3=1', '-DCONFIG_VIRTUAL_BOOT_GPIO=0',
+                    '-DCONFIG_VIRTUAL_DEVICE_%s=1' % device])
+
     def test_boot_debounce_and_wrap(self):
         source = (ROOT / 'examples/virtual/main/main.c').read_text()
         functions = source[source.index('static void on_key'):source.index('static void flush')]

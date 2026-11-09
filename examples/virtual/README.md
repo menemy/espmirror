@@ -8,15 +8,42 @@ and a counter. Swipe left to a scrolling list, and again to a text field
 with LVGL's keyboard: tap the field and type on the computer, or on the
 keyboard on the screen. Enter moves the line under the field.
 
-The viewer draws three keys laid out as the ESP-Mosaico's: two either side
-of the middle of the bottom edge, here BOOT and POWER, and FN at one o'clock. Tap the
-on-screen button, press BOOT on the module, or click the viewer's BOOT key to
-increment the counter; the keyboard's 2 key does the same. POWER (3) darkens
-the screen and brings it back, FN (1) turns to the next page. Only BOOT is
-also a key on the module; the other two exist in the viewer alone.
+The keys exist in the viewer: BOOT (2) counts, as do the on-screen Tap
+button and BOOT on the module, the only key the module has. POWER (3) darkens
+the screen and brings it back, the third key (1) turns to the next page. The
+keyboard's 1, 2 and 3 press them too.
 
-For the ESP-Mosaico's screen, 480 by 480 at 2.16 inches, build with
-`sdkconfig.mosaico` (it turns on PSRAM):
+## Emulating a device
+
+One S3 stands in for any device of the same family: its screen at its size
+and shape, its keys, LVGL and ESP-IDF as on the real thing. In `menuconfig`,
+Virtual display, Device picks one:
+
+| Device | Screen | Touch | Keys |
+|---|---|---|---|
+| Your own | width, height, round, diagonal, name you set | yes | BOOT, POWER and FN, laid out as the ESP-Mosaico's |
+| Waveshare ESP32-S3-Touch-AMOLED-2.16 | 480 × 480 | yes | KEY, BOOT, PWR |
+| Waveshare ESP32-S3 e-Paper 1.54G | 200 × 200 | no | BOOT, PWR |
+| Waveshare ESP32-S3-Touch-AMOLED-1.75C | 466 × 466, round | yes | KEY, BOOT |
+| Waveshare ESP32-S3-Touch-LCD-3.49 | 172 × 640 | yes | BOOT, PWR |
+| Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | 480 × 320 | yes | PWR, BOOT |
+| XOrigin AIPI Lite | 128 × 128 | no | PWR, BOOT |
+| Espressif ESP-Mosaico | 480 × 480 | yes | BOOT, POWER at the bottom, FN at one o'clock |
+| Seeed SenseCAP Watcher | 412 × 412, round | yes | WHEEL, SCROLL |
+
+The name a device gets (`Virtual Waveshare 1.75C`, for instance) makes the
+viewer draw its body from `tools/espmirror.py` `DEVICES`, its keys where the
+body has them; View, Actual size (Cmd 0) shows it at its real size. The
+ESP-Mosaico and the SenseCAP Watcher have no body there yet and get a plain
+frame with the keys at their pixel hints. For your own device set the screen
+in Virtual display and edit the `KEYS` of the last case in `main/main.c`:
+each key is a code (1 to 3 here), a label, and either `-1, -1` for the body's
+place or a pixel near the edge where the viewer should draw it. A body of
+your own is one entry in `DEVICES` (docs/devices.md).
+
+Screens bigger than 240 × 240 need PSRAM: add `sdkconfig.psram` (octal, as on
+the XIAO ESP32S3 and the DevKitC-1 N8R8). `sdkconfig.mosaico` picks the
+ESP-Mosaico with PSRAM in one go:
 
 ```sh
 rm -f sdkconfig
@@ -35,10 +62,11 @@ idf.py menuconfig
 idf.py -p /dev/cu.usbmodemXXXX flash
 ```
 
-In `menuconfig`, Virtual display sets the width, height, round shape,
-diagonal, name and BOOT GPIO. Diagonal uses hundredths of an inch: 200 is
-2.00 inches. Zero leaves the physical size unspecified. Width and height
-range from 128 to 640; round screens normally use equal dimensions.
+In `menuconfig`, Virtual display picks the device and the BOOT GPIO; for
+your own it sets the width, height, round shape, diagonal and name.
+Diagonal uses hundredths of an inch: 200 is 2.00 inches. Zero leaves the
+physical size unspecified. Width and height range from 128 to 640; round
+screens normally use equal dimensions.
 
 Then, from the repository root:
 

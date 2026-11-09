@@ -1,11 +1,8 @@
 # Copyright (c) 2026 Maksim Nagaev
 # SPDX-License-Identifier: Apache-2.0
-# The ESP-Mosaico's screen, 480 x 480 at 2.16 inches; its copy needs PSRAM (octal on the XIAO ESP32S3
-# and the ESP32-S3-DevKitC-1 N8R8):
+# The ESP-Mosaico: its 480 x 480, 2.16-inch screen and its three keys. The screen copy needs PSRAM
+# (octal on the XIAO ESP32S3 and the ESP32-S3-DevKitC-1 N8R8):
 # rm -f sdkconfig; idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.mosaico" build
-CONFIG_VIRTUAL_WIDTH=480
-CONFIG_VIRTUAL_HEIGHT=480
-CONFIG_VIRTUAL_DIAGONAL_100=216
-CONFIG_VIRTUAL_NAME="Virtual ESP-Mosaico"
+CONFIG_VIRTUAL_DEVICE_ESP_MOSAICO=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y

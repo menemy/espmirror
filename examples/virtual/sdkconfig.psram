@@ -1,0 +1,5 @@
+# Copyright (c) 2026 Maksim Nagaev
+# SPDX-License-Identifier: Apache-2.0
+# Octal PSRAM, as on the XIAO ESP32S3 and the ESP32-S3-DevKitC-1 N8R8: screens bigger than 240 x 240.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
