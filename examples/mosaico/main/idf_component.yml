@@ -1,0 +1,5 @@
+# Copyright (c) 2026 Maksim Nagaev
+# SPDX-License-Identifier: Apache-2.0
+dependencies:
+  espressif/esp_lcd_co5300: "^2.2.0"
+  espressif/esp_lcd_touch_cst9220: "^0.1"

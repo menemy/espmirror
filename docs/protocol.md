@@ -8,6 +8,52 @@ application authentication or encryption. TCP is an explicit developer option.
 
 ## Session and transport
 
+### ESP-Iris
+
+`CONFIG_ESPMIRROR_IRIS=y` registers a screen backend and three RPC methods
+with the application's `esp_iris` component. Call `espmirror_start()` before
+`esp_iris_start()`. The application owns the Iris transport and recovery
+services. `CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES` must hold a full RGB565 row
+(`width * 2` bytes).
+
+Iris screen channel 3 supplies the full display as little-endian RGB565,
+with origin 0,0, stride `width * 2` and total size `stride * height`.
+The backend copies each requested chunk from the existing framebuffer while
+holding its lock. It does not allocate another framebuffer or freeze drawing
+for a whole frame: chunks of a moving frame can show different drawing
+updates. A busy framebuffer returns a timeout without blocking the Iris
+protocol task; Iris retries that chunk on a later poll. The Iris Gateway
+controls mirror start, stop and frame rate.
+`espmirror_connected()` includes an active Iris screen stream; a one-shot
+screenshot does not make it connected.
+
+| Service | Method | Request | Successful response |
+| --- | --- | --- | --- |
+| `0x1001` (Iris pointer/v1) | 1 | `<BBhhHI>`, 12 bytes | Accepted sample, unchanged |
+| `0x4553` (espmirror keys) | 1 | `<BB>`, key code and down | Accepted pair, unchanged |
+| `0x4553` (espmirror board) | 2 | Empty | Board JSON from `B`, without the `B` byte |
+
+Pointer phases are 0 begin, 1 move, 2 end. Both reserved fields must be zero;
+coordinates must be within the full display. Sequence is echoed unchanged.
+Key codes are 1 through 10 and down is 0 or 1. Key taps use a down followed
+by an up request. Malformed requests are rejected before enqueueing.
+RPC success acknowledges acceptance into a bounded input queue, consumed
+by the mirror task through the same input path as serial/TCP. A full queue
+returns an error, so the host must not interpret it as an accepted release.
+
+Input RPCs require an active screen stream and are rejected while a serial
+or TCP viewer owns input. A cable/TCP connection releases Iris input and
+invalidates queued Iris samples. Stream end releases held keys and pointer
+and invalidates samples queued for that stream. Iris screen capture can
+continue alongside the other transports. This mapping carries screen,
+pointer and keys only; the serial/TCP LED, audio and text messages are not
+encapsulated in Iris.
+The board metadata RPC is also available without an active stream. Its
+audio and keyboard fields describe the serial/TCP capabilities; an Iris
+viewer disables those controls because this mapping does not carry them.
+
+### Serial and TCP
+
 TCP listens on port 7331 by default when `CONFIG_ESPMIRROR_TCP=y`. The app
 establishes its network connection. mDNS advertises `_musemirror._tcp`, TXT
 `version=2`, `width`, `height`, and `mac`. This shared service name and the hello

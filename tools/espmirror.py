@@ -433,6 +433,8 @@ def is_board_port(port):
     if port.pid == 0x1001:
         return True
     names = (getattr(port, "product", None), getattr(port, "interface", None))
+    if any("esp-iris" in (name or "").lower() for name in names):
+        return False
     if names == (None, None):
         # pyserial on Windows reports neither string, so every TinyUSB serial port is a candidate;
         # one that is not a mirror never answers the handshake.
@@ -847,6 +849,122 @@ class Link:
                 self.stopped.wait(2)
 
 
+class IrisLink(Link):
+    def __init__(self, host, port=PORT, log_file=None, gateway=None):
+        super().__init__(host, port, log_file)
+        from espmirror_iris import DEFAULT_GATEWAY, gateway_url
+        self.gateway = gateway or os.environ.get("ESPMIRROR_IRIS_GATEWAY", DEFAULT_GATEWAY)
+        gateway_url(self.gateway)
+        parse_host(host)
+        self.client = None
+        self.bytes_received = 0
+        self.out = queue.Queue(maxsize=64)
+
+    def send(self, payload):
+        if payload[:1] not in (b"\x00", b"\x01", b"\x03", b"\x06"):
+            return
+        try:
+            self.out.put_nowait(payload)
+        except queue.Full:
+            self.status("Iris input queue full, reconnecting")
+            self.disconnect()
+
+    def disconnect(self):
+        client = self.client
+        if client:
+            client.cancel()
+
+    def close(self):
+        super().close()
+        thread = getattr(self, "thread", None)
+        if thread and thread is not threading.current_thread():
+            thread.join(8)
+
+    def writer(self, client):
+        while self.alive and self.client is client and not client.closed:
+            try:
+                payload = self.out.get(timeout=.1)
+            except queue.Empty:
+                continue
+            try:
+                if self.client is not client or not self.alive:
+                    return
+                client.send(payload)
+            except Exception as error:
+                if self.alive:
+                    self.status("Iris input: %s" % error)
+                client.socket.close()
+                return
+
+    def run(self):
+        from espmirror_iris import IrisClient
+        pending = None
+        while self.alive:
+            if pending:
+                try:
+                    pending.close()
+                    pending = None
+                except Exception as error:
+                    self.status("Iris cleanup: %s, retrying" % error)
+                    self.stopped.wait(2)
+                    continue
+            client = IrisClient(self.gateway, self.host.removeprefix("iris:"))
+            writer = None
+            try:
+                self.client = client
+                self.status("connecting to %s" % self.host)
+                assembler = client.open()
+                if not self.alive:
+                    break
+                while not self.out.empty():
+                    self.out.get_nowait()
+                with self.lock:
+                    self.fb = np.zeros((assembler.height, assembler.width), "<u2")
+                    self.seen = np.zeros(self.fb.shape, bool)
+                self.have_board = True
+                self.on_board(client.board)
+                self.status("")
+                prior_bytes = self.bytes_received
+                writer = threading.Thread(target=self.writer, args=(client,), daemon=True)
+                writer.start()
+                while self.alive:
+                    frame = client.receive()
+                    self.bytes_received = prior_bytes + assembler.bytes_received
+                    if frame is None:
+                        continue
+                    with self.lock:
+                        self.fb = frame
+                        self.seen.fill(True)
+                        self.changes += 1
+                    self.on_frame()
+            except Exception as error:
+                if self.alive:
+                    self.status("%s: %s, retrying" % (self.host, error))
+            finally:
+                self.client = None
+                if writer:
+                    writer.join(4)
+                try:
+                    client.close()
+                except Exception as error:
+                    pending = client
+                    if self.alive:
+                        self.status("Iris disconnect: %s" % error)
+            if self.alive:
+                self.stopped.wait(2)
+        if pending:
+            try:
+                pending.close()
+            except Exception as error:
+                self.status("Iris cleanup failed: %s; the Gateway may still have held input or a running mirror" % error)
+
+
+def make_link(host, port=PORT, log_file=None, gateway=None):
+    if host.startswith("iris:"):
+        return IrisLink(host, port, log_file, gateway=gateway)
+    return Link(host, port, log_file)
+
+
 def rgb565_to_rgb(fb):
     p = fb.astype(np.uint32)
     r, g, b = (p >> 11) & 31, (p >> 5) & 63, p & 31
@@ -907,7 +1025,8 @@ def save_png(link, path, timeout=15):
 # ---------------------------------------------------------------------------------------------------------------
 # The window. Everything below needs PySide6; the protocol above does not.
 
-def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=False, settings=None):
+def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=False, settings=None,
+               iris_gateway=None):
     from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
     from PySide6.QtGui import (QAction, QBrush, QColor, QCursor, QFont, QFontMetricsF, QGuiApplication, QIcon,
                                QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
@@ -2142,7 +2261,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 d.link.close()
             super().closeEvent(e)
 
-    links = [Link(h, p, log_file=log_file) for h, p in targets]
+    links = [make_link(h, p, log_file=log_file, gateway=iris_gateway) for h, p in targets]
     bridge = Bridge()
     win = Window(links)
     bridge.board.connect(win.on_board)
@@ -2170,6 +2289,10 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
 
 
 def parse_host(text):
+    if text.startswith("iris:"):
+        if not re.fullmatch(r"iris:[0-9a-fA-F]{32}", text):
+            raise ValueError("Iris target needs a 32-digit hexadecimal device ID")
+        return text, PORT
     host, _, port = text.rpartition(":") if text.count(":") == 1 else (text, "", "")
     return (host, int(port)) if port else (text, PORT)
 
@@ -2186,6 +2309,9 @@ def main():
     ap.add_argument("--wifi", action=argparse.BooleanOptionalAction, default=None,
                     help="also discover network boards over mDNS")
     ap.add_argument("--usb", action=argparse.BooleanOptionalAction, default=None, help="discover USB boards")
+    ap.add_argument("--iris", action="store_true", help="include connected Iris devices listed by the Gateway")
+    ap.add_argument("--iris-gateway", default=os.environ.get("ESPMIRROR_IRIS_GATEWAY", "http://127.0.0.1:8443"),
+                    help="Iris Gateway URL (or ESPMIRROR_IRIS_GATEWAY)")
     ap.add_argument("--log", help="append timestamped cable console lines to FILE")
     ap.add_argument("--png", help="save the first board's screen once it is still, and exit")
     ap.add_argument("--scale", type=float, help="times the real size")
@@ -2225,17 +2351,27 @@ def main():
         usb = usb_boards() if args.usb else []
         on_usb = {mac for _port, mac in usb if mac}
         net = [b for b in (discover() if args.wifi else []) if not b[3] or b[3] not in on_usb]    # a board on both: the cable
+        iris = []
+        if args.iris:
+            from espmirror_iris import discover as discover_iris
+            try:
+                iris = discover_iris(args.iris_gateway)
+            except (OSError, ValueError) as error:
+                print("Iris discovery: %s" % error, file=sys.stderr)
         if args.list:
             for port, mac in usb:
                 print("%-40s %s" % ("USB " + mac, port))
             for name, addr, port, _mac in net:
                 print("%-40s %s:%d" % (name, addr, port))
+            for item in iris:
+                print("%-40s iris:%s" % (item.get("alias", "ESP-Iris"), item["device_id"]))
             return 0
-        if not usb and not net and not explicit:
+        if not usb and not net and not iris and not explicit:
             print("no board answers as a mirror; pass its serial port or address, add --wifi for mDNS, "
                   "or use --settings to edit viewer preferences", file=sys.stderr)
             return 1
         targets = [(port, PORT) for port, _mac in usb] + [(addr, port) for _name, addr, port, _mac in net]
+        targets += [("iris:" + item["device_id"], PORT) for item in iris]
         targets += [(h, PORT) if is_port(h) else parse_host(h) for h in explicit]
         targets = list(dict.fromkeys(targets))
     else:
@@ -2244,19 +2380,21 @@ def main():
     if args.stats:
         if args.seconds <= 0:
             ap.error("--seconds must be positive")
-        link = Link(*targets[0], log_file=args.log).start()
+        link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway).start()
         try:
             start = time.monotonic()
             time.sleep(args.seconds)
             elapsed = time.monotonic() - start
             print("%d updates in %.2f s, %.1f updates/s" % (link.changes, elapsed, link.changes / elapsed))
+            if isinstance(link, IrisLink):
+                print("%d RGB565 bytes, %.0f bytes/s" % (link.bytes_received, link.bytes_received / elapsed))
             if args.png:
                 return save_png(link, args.png)
             return 0 if link.fb is not None else 1
         finally:
             link.close()
     if args.png:
-        link = Link(*targets[0], log_file=args.log)
+        link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway)
         link.on_status = lambda text: text and not text.startswith("connecting") and print(text, file=sys.stderr)
         code = save_png(link.start(), args.png)
         link.close()
@@ -2266,7 +2404,8 @@ def main():
         print("no such directory: %s" % args.devices, file=sys.stderr)
         return 1
     return run_window(targets, args.scale, args.on_top, args.wall or len(targets) > 1,
-                      devices if os.path.isdir(devices) else None, log_file=args.log, sound=args.sound)
+                      devices if os.path.isdir(devices) else None, log_file=args.log, sound=args.sound,
+                      iris_gateway=args.iris_gateway)
 
 
 if __name__ == "__main__":

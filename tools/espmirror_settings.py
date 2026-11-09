@@ -3,6 +3,7 @@
 """Viewer preferences. Qt is imported only when the window needs it."""
 import math
 import os
+import re
 
 
 DEFAULTS = dict(scale=1.0, on_top=False, show_touches=True, sound=False,
@@ -30,7 +31,10 @@ def read_preferences(settings=None):
 
 def validate_hosts(text):
     for target in text.split():
-        if target.count(":") == 1:
+        if target.startswith("iris:"):
+            if not re.fullmatch(r"iris:[0-9a-fA-F]{32}", target):
+                raise ValueError("Iris target needs a 32-digit hexadecimal device ID.")
+        elif target.count(":") == 1:
             host, port = target.rsplit(":", 1)
             if not host or not port.isdecimal() or not 1 <= int(port) <= 65535:
                 raise ValueError("Use a host or host:port, with a port from 1 to 65535.")

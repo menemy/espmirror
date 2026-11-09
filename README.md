@@ -130,7 +130,8 @@ panel dims or sleeps. The viewer's own microphone comes back through
 
 ## Transports
 
-Three ways to the viewer; a board can have the cable and a network at once.
+USB serial, USB network, TCP and ESP-Iris; a board can have the cable and a
+network at once.
 
 **USB serial** (the default). Select `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`
 (or console NONE) and `CONFIG_ESPMIRROR_USB=y`. UART and USB OTG CDC consoles
@@ -171,6 +172,27 @@ earlier name, `CONFIG_ESPMIRROR_WIFI`, keep TCP through `sdkconfig.rename`.
 The port has **no authentication**. Anyone who can reach it can
 see the screen, press keys, listen and talk. Leave TCP off in deployed images
 unless the network and these capabilities are intentionally trusted.
+
+**ESP-Iris** (`CONFIG_ESPMIRROR_IRIS=y`). The application supplies and starts
+`esp_iris`, which owns its USB transport. Start espmirror before Iris; it
+registers the existing framebuffer, pointer input, keys and board metadata.
+The viewer uses a running ESP-Iris Gateway:
+
+```sh
+python3 tools/espmirror.py iris:DEVICE_ID --iris-gateway http://127.0.0.1:PORT
+python3 tools/espmirror.py --list --iris --iris-gateway http://127.0.0.1:PORT
+```
+
+Replace `DEVICE_ID` with the Gateway's 32-digit device ID and `PORT` with
+its HTTP port. `ESPMIRROR_IRIS_GATEWAY` also sets the URL; the fallback is
+`http://127.0.0.1:8443`. The viewer does not start or restart the Gateway.
+`--iris` opts into discovery through its device list. Iris supports screen,
+touch and keys here; audio, LED and typing are available through serial/TCP.
+The Iris path needs the `websockets` package in `tools/requirements.txt`.
+Its synchronous client fits the viewer's existing worker threads.
+[`examples/mosaico`](examples/mosaico) builds a mirror-only ESP32-S31
+application with the ESP-Mosaico Vibe Mode 0.2 recovery contract.
+Its optional panel build drives CO5300, CST9220, FN and BOOT.
 
 Delta and QOI are off by default (`CONFIG_ESPMIRROR_DELTA`,
 `CONFIG_ESPMIRROR_QOI`). Delta requires another width*height*2 byte reference.

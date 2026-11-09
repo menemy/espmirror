@@ -15,6 +15,13 @@ idf_component_register(SRCS "src/espmirror.c" "src/espmirror_core.c"
                        PRIV_INCLUDE_DIRS "src"
                        PRIV_REQUIRES ${espmirror_requires})
 idf_component_optional_requires(PUBLIC lvgl__lvgl lvgl)
+if(CONFIG_ESPMIRROR_IRIS)
+    idf_build_get_property(components BUILD_COMPONENTS)
+    if(NOT "esp_iris" IN_LIST components AND NOT "espressif__esp_iris" IN_LIST components)
+        message(FATAL_ERROR "CONFIG_ESPMIRROR_IRIS needs esp_iris in the application's component directories")
+    endif()
+    idf_component_optional_requires(PRIVATE esp_iris espressif__esp_iris)
+endif()
 if(CONFIG_ESPMIRROR_TCP)
     idf_component_optional_requires(PRIVATE espressif__mdns mdns)
 endif()

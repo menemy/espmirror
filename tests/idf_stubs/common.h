@@ -16,12 +16,14 @@ typedef int esp_err_t;
 #define ESP_ERR_INVALID_STATE 2
 #define ESP_ERR_NO_MEM 3
 #define ESP_ERR_NOT_SUPPORTED 4
+#define ESP_ERR_TIMEOUT 5
 #define ESP_MAC_WIFI_STA 0
 #define MALLOC_CAP_8BIT 1
 #define MALLOC_CAP_SPIRAM 2
 #define portMUX_INITIALIZER_UNLOCKED 0
 #define portMAX_DELAY 0
 #define pdTRUE 1
+#define pdFALSE 0
 #define pdPASS 1
 #define pdMS_TO_TICKS(x) (x)
 #define portENTER_CRITICAL(x) ((void)(x))

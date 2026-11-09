@@ -16,6 +16,10 @@
 #include <stddef.h>
 #include "esp_mac.h"
 #include "esp_rom_crc.h"
+#if CONFIG_ESPMIRROR_IRIS
+#include "esp_iris.h"
+#include "esp_iris_service_profiles.h"
+#endif
 #if CONFIG_ESPMIRROR_TCP
 #include "mdns.h"
 #endif
@@ -38,6 +42,9 @@
 #include "freertos/task.h"
 #ifndef CONFIG_ESPMIRROR_TCP
 #define CONFIG_ESPMIRROR_TCP 0
+#endif
+#ifndef CONFIG_ESPMIRROR_IRIS
+#define CONFIG_ESPMIRROR_IRIS 0
 #endif
 #ifndef CONFIG_ESPMIRROR_AUDIO
 #define CONFIG_ESPMIRROR_AUDIO 0
@@ -165,8 +172,11 @@ static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb,
 static bool viewer_send(const void *buf, size_t len, int ms);
 static void serial_end(void);
 static void viewer_drop(void);
-static bool viewer_on(void) { return espmirror_connected(); }
+static bool viewer_on(void) { return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0; }
 static void tcp_drop(void);
+#if CONFIG_ESPMIRROR_IRIS
+static void iris_takeover(void);
+#endif
 
 static void *alloc(size_t size, bool zero) {
     uint32_t caps = MALLOC_CAP_8BIT;
@@ -280,7 +290,11 @@ void espmirror_set_led(uint8_t mode) {
 }
 
 bool espmirror_connected(void) {
-    return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0;
+    return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0
+#if CONFIG_ESPMIRROR_IRIS
+        || (s_ready && esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN))
+#endif
+        ;
 }
 
 void espmirror_text_open(bool open) {
@@ -643,6 +657,9 @@ static void tcp_admit(int fd) {
         return;
     }
     last_open_us = now;
+#if CONFIG_ESPMIRROR_IRIS
+    iris_takeover();
+#endif
     if (s_cfd >= 0) {
         tcp_send(s_cfd, "T", 1, NULL, 0, 500);
         tcp_drop();                        /* its keys and audio end with it */
@@ -792,6 +809,9 @@ static void serial_end(void)
 static void serial_admit(void)
 {
     if (!s_serial_open) return;
+#if CONFIG_ESPMIRROR_IRIS
+    iris_takeover();
+#endif
     if (s_cfd >= 0) { tcp_send(s_cfd, "T", 1, NULL, 0, 500); tcp_drop(); }
     s_serial = true;
     s_led_sent = 0xff;
@@ -935,11 +955,167 @@ static void console_task(void *arg) {
     }
 }
 
+#if CONFIG_ESPMIRROR_IRIS
+#define IRIS_KEY_SERVICE 0x4553
+#define IRIS_KEY_METHOD 1
+#define IRIS_BOARD_METHOD 2
+typedef struct {
+    unsigned generation;
+    uint8_t len, data[5];
+} iris_input_t;
+static QueueHandle_t s_iris_in;
+static atomic_uint s_iris_generation;
+static unsigned s_iris_seen;
+static bool s_iris_input_owned;
+static bool s_iris_screen_registered, s_iris_pointer_registered, s_iris_key_registered, s_iris_board_registered;
+
+static esp_err_t iris_screen_begin(const esp_iris_media_desc_t *requested,
+                                   esp_iris_media_desc_t *actual, uint32_t *total,
+                                   void *ctx) {
+    (void)ctx;
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    if (requested->format && requested->format != ESP_IRIS_PIXEL_FORMAT_RGB565) return ESP_ERR_NOT_SUPPORTED;
+    *actual = (esp_iris_media_desc_t){ .width = s_w, .height = s_h,
+        .stride = (uint32_t)s_w * 2, .format = ESP_IRIS_PIXEL_FORMAT_RGB565 };
+    *total = actual->stride * actual->height;
+    return ESP_OK;
+}
+
+static esp_err_t iris_screen_read(uint32_t offset, uint8_t *out, size_t capacity,
+                                  size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    size_t total = (size_t)s_w * s_h * 2;
+    if (offset > total || (!out && capacity)) return ESP_ERR_INVALID_ARG;
+    size_t n = total - offset;
+    if (n > capacity) n = capacity;
+    /* Iris reads chunks across ticks; locking each copy permits drawing between chunks. */
+    if (xSemaphoreTake(s_lock, 0) != pdTRUE) return ESP_ERR_TIMEOUT;
+    if (n) memcpy(out, (const uint8_t *)s_fb + offset, n);
+    xSemaphoreGive(s_lock);
+    *size = n;
+    return ESP_OK;
+}
+
+static void iris_screen_end(void *ctx) {
+    (void)ctx;
+    atomic_fetch_add(&s_iris_generation, 1);
+}
+
+static esp_err_t iris_enqueue(iris_input_t *event) {
+    event->generation = atomic_load(&s_iris_generation);
+    if (!s_ready || viewer_on() || !esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN)) return ESP_ERR_INVALID_STATE;
+    if (event->generation != atomic_load(&s_iris_generation)) return ESP_ERR_INVALID_STATE;
+    return xQueueSend(s_iris_in, event, 0) == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t iris_pointer_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
+                                  size_t capacity, size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!request || request->payload_size != ESP_IRIS_POINTER_MESSAGE_SIZE || !request->payload
+        || capacity < ESP_IRIS_POINTER_MESSAGE_SIZE || !response) return ESP_ERR_INVALID_ARG;
+    const uint8_t *p = request->payload;
+    if (p[0] > 2 || p[1] || p[6] || p[7]) return ESP_ERR_INVALID_ARG;
+    if (!s_cfg.touch && !s_cfg.on_pointer) return ESP_ERR_NOT_SUPPORTED;
+    int x = (int16_t)(p[2] | p[3] << 8), y = (int16_t)(p[4] | p[5] << 8);
+    if (x < 0 || y < 0 || x >= s_w || y >= s_h) return ESP_ERR_INVALID_ARG;
+    iris_input_t event = { .len = 5, .data = { p[0] != 2, p[2], p[3], p[4], p[5] } };
+    esp_err_t err = iris_enqueue(&event);
+    if (err != ESP_OK) return err;
+    memcpy(response, p, ESP_IRIS_POINTER_MESSAGE_SIZE);
+    *size = ESP_IRIS_POINTER_MESSAGE_SIZE;
+    return ESP_OK;
+}
+
+static esp_err_t iris_key_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
+                              size_t capacity, size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!request || request->payload_size != 2 || !request->payload || !response || capacity < 2) return ESP_ERR_INVALID_ARG;
+    const uint8_t *p = request->payload;
+    if (p[0] < 1 || p[0] > 10 || p[1] > 1) return ESP_ERR_INVALID_ARG;
+    if (!s_cfg.on_key) return ESP_ERR_NOT_SUPPORTED;
+    iris_input_t event = { .len = 3, .data = { 6, p[0], p[1] } };
+    esp_err_t err = iris_enqueue(&event);
+    if (err != ESP_OK) return err;
+    memcpy(response, p, 2);
+    *size = 2;
+    return ESP_OK;
+}
+
+static void iris_release(void) {
+    if (!s_iris_input_owned) return;
+    keys_release();
+    pointer_put(s_ptr_x, s_ptr_y, false);
+    s_iris_input_owned = false;
+}
+
+static esp_err_t iris_board_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
+                                size_t capacity, size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!s_ready) return ESP_ERR_INVALID_STATE;
+    if (!request || request->payload_size || !response || capacity < s_board_len - 1) return ESP_ERR_INVALID_ARG;
+    memcpy(response, s_board + 1, s_board_len - 1);
+    *size = s_board_len - 1;
+    return ESP_OK;
+}
+
+static void iris_takeover(void) {
+    atomic_fetch_add(&s_iris_generation, 1);
+    iris_release();
+}
+
+static void iris_pump(void) {
+    unsigned generation = atomic_load(&s_iris_generation);
+    bool active = esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN) && !viewer_on();
+    if (!active || generation != s_iris_seen) iris_release();
+    s_iris_seen = generation;
+    iris_input_t event;
+    for (int i = 0; i < 8 && xQueueReceive(s_iris_in, &event, 0) == pdTRUE; i++) {
+        if (!active || event.generation != generation) continue;
+        s_iris_input_owned = true;
+        input(event.data, event.len);
+    }
+}
+
+static void iris_unregister(void) {
+    if (s_iris_board_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_BOARD_METHOD);
+    if (s_iris_key_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_KEY_METHOD);
+    if (s_iris_pointer_registered) esp_iris_rpc_unregister(ESP_IRIS_POINTER_SERVICE_ID, ESP_IRIS_POINTER_METHOD_ID);
+    if (s_iris_screen_registered) esp_iris_screen_unregister(&s_cfg);
+    s_iris_key_registered = s_iris_pointer_registered = s_iris_screen_registered = false;
+    s_iris_board_registered = false;
+}
+
+static esp_err_t iris_register(void) {
+    const esp_iris_screen_backend_t backend = { .begin = iris_screen_begin,
+        .read = iris_screen_read, .end = iris_screen_end, .user_ctx = &s_cfg };
+    esp_err_t err = esp_iris_screen_register(&backend);
+    if (err != ESP_OK) return err;
+    s_iris_screen_registered = true;
+    err = esp_iris_rpc_register(ESP_IRIS_POINTER_SERVICE_ID, ESP_IRIS_POINTER_METHOD_ID, iris_pointer_rpc, &s_cfg);
+    if (err != ESP_OK) return err;
+    s_iris_pointer_registered = true;
+    err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_KEY_METHOD, iris_key_rpc, &s_cfg);
+    if (err != ESP_OK) return err;
+    s_iris_key_registered = true;
+    err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_BOARD_METHOD, iris_board_rpc, &s_cfg);
+    if (err == ESP_OK) s_iris_board_registered = true;
+    return err;
+}
+#endif
+
 static void mirror_task(void *arg) {
     (void)arg;
     int64_t last_beat = 0, last_frame = 0;
     while (!s_ready) vTaskDelay(1);
     for (;;) {
+#if CONFIG_ESPMIRROR_IRIS
+        iris_pump();
+#endif
         serial_pump();
         tcp_wait(10);
         serial_pump();
@@ -971,7 +1147,11 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     }
     if (s_task) return ESP_ERR_INVALID_STATE;
     if (config->button_count > 10 || (config->button_count && !config->buttons)) return ESP_ERR_INVALID_ARG;
-    if (!CONFIG_ESPMIRROR_TCP && !espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
+    if (!CONFIG_ESPMIRROR_TCP && !CONFIG_ESPMIRROR_IRIS && !espmirror_usb_supported()) return ESP_ERR_NOT_SUPPORTED;
+#if CONFIG_ESPMIRROR_IRIS
+    if (esp_iris_is_started()) return ESP_ERR_INVALID_STATE;
+    if ((size_t)config->width * 2 > CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES) return ESP_ERR_INVALID_ARG;
+#endif
     if (CONFIG_ESPMIRROR_USB_NETWORK && config->external_console) return ESP_ERR_INVALID_ARG;   /* the component owns TinyUSB */
     s_cfg = *config;
     /* The name as JSON needs it: a bounded copy, quotes and backslashes escaped, control characters out. */
@@ -1020,6 +1200,9 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     }
     if (s_board_len + 3 > sizeof(s_board)) return ESP_ERR_INVALID_ARG;
     memcpy(s_board + s_board_len, "]}", 3); s_board_len += 2;
+#if CONFIG_ESPMIRROR_IRIS
+    if (s_board_len - 1 > CONFIG_ESP_IRIS_RPC_BODY_BYTES) return ESP_ERR_INVALID_ARG;
+#endif
     unsigned flags = 0;
 #if CONFIG_ESPMIRROR_DELTA
     flags |= ESPMIRROR_DELTA;
@@ -1031,6 +1214,9 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     if (!espmirror_core_init_ex(&s_core, s_w, s_h, flags, s_previous)) return ESP_ERR_NO_MEM;
     s_serial_in = xQueueCreate(SERIAL_QUEUE, SERIAL_ITEM_SIZE);
     s_text_in = xQueueCreate(TEXT_Q, sizeof(espmirror_text_t));
+#if CONFIG_ESPMIRROR_IRIS
+    s_iris_in = xQueueCreate(PTR_Q, sizeof(iris_input_t));
+#endif
     s_serial_tx = xSemaphoreCreateMutex();
     s_serial_done = xSemaphoreCreateBinary();
     SemaphoreHandle_t lock = xSemaphoreCreateMutex();
@@ -1055,6 +1241,13 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         fail = "no memory for the screen copy";
         err = ESP_ERR_NO_MEM;
     }
+#if CONFIG_ESPMIRROR_IRIS
+    if (!s_iris_in) { fail = "no Iris input queue"; err = ESP_ERR_NO_MEM; }
+    if (!fail) {
+        err = iris_register();
+        if (err != ESP_OK) fail = "Iris backend registration failed";
+    }
+#endif
     /* Before the socket: the USB network brings up the TCP/IP stack. */
     if (!fail && espmirror_usb_supported() && !config->external_console) {
         err = espmirror_usb_install();
@@ -1108,6 +1301,11 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
         }
     }
     if (fail) {
+#if CONFIG_ESPMIRROR_IRIS
+        iris_unregister();
+        if (s_iris_in) vQueueDelete(s_iris_in);
+        s_iris_in = NULL;
+#endif
         ESP_LOGE(TAG, "%s (errno %d): no live screen", fail, errno);
 #if CONFIG_ESPMIRROR_TCP
         if (fd >= 0) close(fd);

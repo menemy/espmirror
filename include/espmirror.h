@@ -89,6 +89,8 @@ typedef struct {
 /* Starts the mirror task. USB is the default; CONFIG_ESPMIRROR_TCP adds TCP on
  * every network the app brings up (it starts Wi-Fi itself), and
  * CONFIG_ESPMIRROR_USB_NETWORK puts a serial port and a network on the USB port.
+ * CONFIG_ESPMIRROR_IRIS registers screen and input with the application's
+ * esp_iris instance; call before esp_iris_start().
  * Keeps a copy of the screen, width x height RGB565; copies the config (the
  * name too, 47 characters at most). Once; from one task. */
 esp_err_t espmirror_start(const espmirror_config_t *config);

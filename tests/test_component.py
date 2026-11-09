@@ -13,14 +13,34 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(os.name == 'posix', 'C harnesses use POSIX stubs and sanitizers')
 class ComponentTests(unittest.TestCase):
+    def test_iris_screen_rpc_and_lifecycle(self):
+        source = (ROOT / 'src/espmirror.c').read_text()
+        start = source.index('#define IRIS_KEY_SERVICE')
+        end = source.index('\n#endif\n\nstatic void mirror_task', start)
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / 'iris_impl.inc').write_text(source[start:end])
+            exe = folder / 'iris'
+            command = shlex.split(os.environ.get('CC', 'cc')) + [
+                '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
+                '-I' + str(folder), str(ROOT / 'tests/espmirror_iris_harness.c'), '-o', str(exe)]
+            result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, 'TMPDIR': tmp})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([exe], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_component_configurations(self):
-        for wifi, audio, usb in ((0, 0, 1), (0, 1, 1), (1, 0, 0), (1, 1, 1)):
-            with self.subTest(wifi=wifi, audio=audio, usb=usb), tempfile.TemporaryDirectory() as tmp:
+        for wifi, audio, usb, iris in ((0, 0, 1, 0), (0, 1, 1, 0), (1, 0, 0, 0), (1, 1, 1, 0),
+                                      (0, 0, 0, 1), (1, 1, 1, 1)):
+            with self.subTest(wifi=wifi, audio=audio, usb=usb, iris=iris), tempfile.TemporaryDirectory() as tmp:
                 command = shlex.split(os.environ.get('CC', 'cc')) + [
                     '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsyntax-only',
                     '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
                     '-I' + str(ROOT / 'src'), '-DCONFIG_ESPMIRROR_TCP=%d' % wifi,
                     '-DCONFIG_ESPMIRROR_AUDIO=%d' % audio, '-DCONFIG_ESPMIRROR_USB=%d' % usb,
+                    '-DCONFIG_ESPMIRROR_IRIS=%d' % iris, '-DCONFIG_ESP_IRIS_MEDIA_LATEST_BYTES=4096',
+                    '-DCONFIG_ESP_IRIS_RPC_BODY_BYTES=2048',
                     '-DCONFIG_ESPMIRROR_DELTA=1', '-DCONFIG_ESPMIRROR_QOI=1',
                     str(ROOT / 'src/espmirror.c'), str(ROOT / 'src/espmirror_usb.c'),
                     str(ROOT / 'src/espmirror_lvgl.c')]

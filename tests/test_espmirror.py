@@ -918,6 +918,8 @@ class SerialTests(unittest.TestCase):
                     ('COM13', None, 0x1234, 0x1001)]]
         data += [SimpleNamespace(device='/dev/cu.usbmodem2', serial_number='1020BA050328', vid=0x303a, pid=0x4001,
                                  product='espmirror', interface=None),
+                 SimpleNamespace(device='/dev/cu.iris', serial_number='1020BA050330', vid=0x303a, pid=0x4002,
+                                 product='ESP-Iris espmirror', interface='ESP-Iris data'),
                  SimpleNamespace(device='/dev/cu.usbmodem3', serial_number='1020BA050329', vid=0x303a, pid=0x4001,
                                  product='Espressif Device', interface=None),
                  # pyserial on Windows fills neither product nor interface.

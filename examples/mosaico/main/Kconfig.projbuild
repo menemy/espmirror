@@ -1,0 +1,9 @@
+menu "Mosaico example"
+    config MOSAICO_PANEL
+        bool "Drive the physical panel, touch, FN and BOOT"
+        default n
+        help
+            CO5300 QSPI panel and CST9220 touch. Detect the board revision
+            from eFuse before selecting pins. POWER in the viewer toggles
+            the display; the physical ON/OFF switch is not a GPIO input.
+endmenu

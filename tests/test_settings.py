@@ -55,7 +55,9 @@ class StartupSettingsTests(unittest.TestCase):
                     patch.object(mirror, 'run_window', return_value=0) as window:
                 self.assertEqual(mirror.main(), 0)
                 self.assertEqual(window.call_args.args[:3], (targets, scale, top))
-                self.assertEqual(window.call_args.kwargs, dict(log_file=log, sound=sound))
+                self.assertEqual(window.call_args.kwargs, dict(
+                    log_file=log, sound=sound,
+                    iris_gateway=os.environ.get('ESPMIRROR_IRIS_GATEWAY', 'http://127.0.0.1:8443')))
                 self.assertEqual(net.called, discovery)
                 usb.assert_not_called()
 
@@ -68,12 +70,24 @@ class StartupSettingsTests(unittest.TestCase):
             prefs.assert_not_called()
             net.assert_not_called()
 
+    def test_saved_iris_target_and_discovery_are_deduplicated(self):
+        device = '0123456789abcdef0123456789abcdef'
+        preferences = dict(DEFAULTS, usb=False, hosts='iris:' + device)
+        with patch.object(sys, 'argv', ['mirror', '--iris', '--iris-gateway', 'http://localhost:9999']), \
+                patch('espmirror_settings.read_preferences', return_value=preferences), \
+                patch.object(mirror.importlib.util, 'find_spec', return_value=True), \
+                patch('espmirror_iris.discover', return_value=[dict(device_id=device)]), \
+                patch.object(mirror, 'run_window', return_value=0) as window:
+            self.assertEqual(mirror.main(), 0)
+            self.assertEqual(window.call_args.args[0], [('iris:' + device, mirror.PORT)])
+            self.assertEqual(window.call_args.kwargs['iris_gateway'], 'http://localhost:9999')
+
     def test_invalid_scale_and_saved_targets(self):
         for scale in ('nan', 'inf', '0', '-1'):
             with self.subTest(scale=scale), patch.object(sys, 'argv', ['mirror', '--list', '--scale', scale]), \
                     contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 mirror.main()
-        for host in ('host:0', 'host:65536', ':7331', 'host:nope'):
+        for host in ('host:0', 'host:65536', ':7331', 'host:nope', 'iris:123', 'iris:' + 'g' * 32):
             with self.subTest(host=host), self.assertRaises(ValueError):
                 validate_hosts(host)
         self.assertEqual(validate_hosts(' COM7\n::1\nlocalhost:7331 '), 'COM7\n::1\nlocalhost:7331')

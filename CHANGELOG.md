@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+Optional ESP-Iris screen backend reuses the mirror framebuffer. Iris pointer
+and key RPCs feed the existing input path; board metadata is available by RPC.
+The viewer accepts `iris:<device-id>`, discovers devices with `--iris`, and
+assembles RGB565 tiles from a running Gateway. Iris carries screen and input;
+audio, LED and typing remain on serial/TCP. A mirror-only ESP-Mosaico example
+targets ESP32-S31 and retains the Vibe Mode 0.2 partition layout.
+Its optional physical variant drives the CO5300 panel, CST9220 touch, FN
+and BOOT; viewer POWER toggles display state.
+
 ## 0.2.0
 
 Protocol v2: the mirror streams over the USB Serial/JTAG console by default,
