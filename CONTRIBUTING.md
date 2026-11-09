@@ -43,3 +43,5 @@ ESP-IDF 5.4.3 or later for Kconfig-conditional panel dependencies; its Waveshare
 variants have 5.4.3 and 6.0.1 jobs. Virtual on `esp32s3` has 5.4 and 6.0.1
 jobs, plus its USB network and ESP-Mosaico screen variants on 6.0.1. The virtual
 example needs no network credentials or panel.
+
+The Waveshare P4 3.5 example has an ESP-IDF 6.0.3 CI job for `esp32p4`.

@@ -28,6 +28,10 @@ menu "espmirror example"
         config EXAMPLE_BOARD_WAVESHARE_154G
             bool "Waveshare 1.54G (ESP32S3, 200 x 200 four-color e-paper)"
             depends on IDF_TARGET_ESP32S3
+
+        config EXAMPLE_BOARD_WAVESHARE_P4_35
+            bool "Waveshare P4 3.5 (ESP32P4, 480 x 320 ST7796)"
+            depends on IDF_TARGET_ESP32P4
     endchoice
 
     config EXAMPLE_BOARD_ID
@@ -36,6 +40,7 @@ menu "espmirror example"
         default "waveshare_175c" if EXAMPLE_BOARD_WAVESHARE_175C
         default "waveshare_349" if EXAMPLE_BOARD_WAVESHARE_349
         default "waveshare_154g" if EXAMPLE_BOARD_WAVESHARE_154G
+        default "waveshare_p4_35" if EXAMPLE_BOARD_WAVESHARE_P4_35
         default "none"
 
     config EXAMPLE_MIRROR_NAME
@@ -45,6 +50,7 @@ menu "espmirror example"
         default "Waveshare 1.75C" if EXAMPLE_BOARD_WAVESHARE_175C
         default "Waveshare 3.49 V2" if EXAMPLE_BOARD_WAVESHARE_349
         default "Waveshare 1.54G" if EXAMPLE_BOARD_WAVESHARE_154G
+        default "Waveshare P4 3.5" if EXAMPLE_BOARD_WAVESHARE_P4_35
         default "espmirror lvgl"
         help
             The viewer selects a known device body from a model fragment in
@@ -53,6 +59,7 @@ menu "espmirror example"
 
     config EXAMPLE_MIRROR_WIDTH
         int "Screen width, pixels" if EXAMPLE_BOARD_NONE
+        default 480 if EXAMPLE_BOARD_WAVESHARE_P4_35
         default 200 if EXAMPLE_BOARD_WAVESHARE_154G
         default 172 if EXAMPLE_BOARD_WAVESHARE_349
         default 466 if EXAMPLE_BOARD_WAVESHARE_175C
@@ -62,6 +69,7 @@ menu "espmirror example"
 
     config EXAMPLE_MIRROR_HEIGHT
         int "Screen height, pixels" if EXAMPLE_BOARD_NONE
+        default 320 if EXAMPLE_BOARD_WAVESHARE_P4_35
         default 200 if EXAMPLE_BOARD_WAVESHARE_154G
         default 640 if EXAMPLE_BOARD_WAVESHARE_349
         default 466 if EXAMPLE_BOARD_WAVESHARE_175C
@@ -71,6 +79,7 @@ menu "espmirror example"
 
     config EXAMPLE_MIRROR_PPI
         int "Pixels per inch (for the viewer's real-size mode)"
+        default 165 if EXAMPLE_BOARD_WAVESHARE_P4_35
         default 184 if EXAMPLE_BOARD_WAVESHARE_154G
         default 190 if EXAMPLE_BOARD_WAVESHARE_349
         default 270 if EXAMPLE_BOARD_WAVESHARE_175C

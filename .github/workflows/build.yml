@@ -23,6 +23,11 @@ jobs:
           - idf: "v5.4"
             example: lvgl
         include:
+          - idf: "v6.0.3"
+            example: lvgl
+            target: esp32p4
+            variant: waveshare-p4_35
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-p4-35"
           - idf: "v5.4.3"
             example: lvgl
             target: esp32s3

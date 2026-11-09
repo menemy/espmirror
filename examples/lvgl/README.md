@@ -17,6 +17,7 @@ and `CONFIG_ESPMIRROR_AUDIO`.
 | Waveshare ESP32-S3-Touch-AMOLED-1.75C | CO5300, 466 × 466 round QSPI | CST9217 | KEY (1), BOOT (2) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 | Waveshare ESP32-S3-Touch-LCD-3.49 V2 | AXS15231B, 172 × 640 QSPI | AXS15231B | BOOT (2), PWR (3) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 | Waveshare ESP32-S3 e-Paper 1.54G | 200 × 200, black/white/yellow/red | None | BOOT (2), PWR (3) | GPIO3, active-low user LED | ES8311 speaker and mic | Not yet |
+| Waveshare ESP32-P4-WIFI6-Touch-LCD-3.5 | ST7796, 480 × 320 SPI | FT6336 | BOOT (2), PWR (3) | No user LED | ES8311 speaker and mic | Not yet |
 
 ## Waveshare AMOLED 2.16
 
@@ -115,6 +116,31 @@ controller is present; the viewer pointer operates the UI.
 
 The hardware reference is Waveshare's
 [ESP-IDF examples](https://github.com/waveshareteam/ESP32-S3-ePaper-1.54G/tree/main/Example/ESP-IDF_5.5.1).
+
+## Waveshare P4 LCD 3.5
+
+Use ESP-IDF 6.0.3 and `sdkconfig.waveshare-p4-35`, targeting `esp32p4`. The
+overlay selects silicon revision 3.x, PSRAM and the existing TinyUSB CDC/NCM
+mirror transport. Connect the board's USB OTG connector for the viewer; the
+CH343 connector carries the UART console. The C6 firmware is not changed.
+
+```sh
+idf.py -B /tmp/devices-build/lvgl-p4-35 \
+  -D SDKCONFIG=/tmp/devices-build/lvgl-p4-35/sdkconfig \
+  -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.waveshare-p4-35' \
+  -D IDF_TARGET=esp32p4 build
+```
+
+See the [virtual example's USB network instructions](../virtual/README.md)
+for the host setup and discovery behavior of the CDC/NCM transport.
+
+The ST7796 panel runs in 480 × 320 landscape orientation. FT6336 touch uses
+the same coordinate transform. PWR events come from AXP2101 I2C latches;
+BOOT uses GPIO35. ES8311 provides speaker and microphone audio. The mirror
+name `Waveshare P4 3.5` selects the 3.5 viewer body.
+
+The hardware reference is Waveshare's
+[P4 3.5 BSP](https://github.com/waveshareteam/Waveshare-ESP32-components/tree/3812a4c6146ccba2448695f3df7f24b9d9be1d34/bsp/esp32_p4_wifi6_touch_lcd_3_5).
 
 ## Hardware checks
 
