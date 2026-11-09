@@ -5,6 +5,7 @@ import base64
 from contextlib import contextmanager
 import http.client
 import json
+import os
 import re
 import socket
 import secrets
@@ -408,6 +409,10 @@ class IrisClient:
         for sock in sockets:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
+                if os.name == 'nt':
+                    # Winsock shutdown leaves a blocked recv waiting; closesocket wakes it.
+                    # sock.close() would not: http.client's makefile holds the descriptor open.
+                    socket.close(sock.detach())
             except OSError:
                 pass
         transport = self.socket
