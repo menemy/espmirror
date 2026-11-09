@@ -1353,8 +1353,9 @@ static esp_err_t start(const espmirror_config_t *config) {
     __atomic_store_n(&s_fb, fb, __ATOMIC_RELEASE);   /* the drawing side may call in from now on */
     atomic_store_explicit(&s_ready, true, memory_order_release);   /* and the task may serve */
 #if CONFIG_ESPMIRROR_TCP
-    esp_err_t mdns = mdns_init();
-    if (mdns == ESP_OK) mdns_hostname_set("espmirror");
+    esp_err_t mdns = mdns_init();      /* ESP_OK also when the app started mDNS already */
+    char host[MDNS_NAME_BUF_LEN];
+    if (mdns == ESP_OK && mdns_hostname_get(host) != ESP_OK) mdns_hostname_set("espmirror");
     if (mdns == ESP_OK || mdns == ESP_ERR_INVALID_STATE) {
         char width[8], height[8], address[18];
         snprintf(width, sizeof(width), "%d", s_w); snprintf(height, sizeof(height), "%d", s_h);

@@ -120,6 +120,52 @@ int main(void) {
             self.assertEqual(result.returncode, 0, result.stderr)
 
     @unittest.skipUnless(os.name == 'posix', 'C harness uses POSIX compiler and sanitizers')
+    def test_mdns_keeps_an_existing_hostname(self):
+        source = (ROOT / 'src/espmirror.c').read_text()
+        start = source.index('    esp_err_t mdns = mdns_init();')
+        end = source.index('\n', source.index('mdns_hostname_set("espmirror")', start)) + 1
+        harness = r'''#include <assert.h>
+#include <string.h>
+typedef int esp_err_t;
+#define ESP_OK 0
+#define ESP_ERR_INVALID_STATE 0x103
+#define MDNS_NAME_BUF_LEN 64
+static esp_err_t init_result;
+static const char *existing;
+static char set_to[MDNS_NAME_BUF_LEN];
+static esp_err_t mdns_init(void) { return init_result; }
+static esp_err_t mdns_hostname_get(char *out) {
+    if (!existing) return ESP_ERR_INVALID_STATE;
+    strcpy(out, existing);
+    return ESP_OK;
+}
+static esp_err_t mdns_hostname_set(const char *name) { strcpy(set_to, name); return ESP_OK; }
+static void run(void) {
+''' + source[start:end] + r'''    (void)mdns;
+}
+int main(void) {
+    run();
+    assert(strcmp(set_to, "espmirror") == 0);
+    set_to[0] = 0; existing = "kitchen";
+    run();
+    assert(set_to[0] == 0);
+    existing = NULL; init_result = ESP_ERR_INVALID_STATE;
+    run();
+    assert(set_to[0] == 0);
+    return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path, exe = Path(tmp) / 'mdns.c', Path(tmp) / 'mdns'
+            path.write_text(harness)
+            command = shlex.split(os.environ.get('CC', 'cc')) + [
+                '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined', str(path), '-o', str(exe)]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([exe], capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(os.name == 'posix', 'C harness uses POSIX compiler and sanitizers')
     def test_board_name_stays_valid_json(self):
         source = (ROOT / 'src/espmirror.c').read_text()
         start = source.index('    size_t at = 0;')

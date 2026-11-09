@@ -167,7 +167,10 @@ with BOOT held, and read the boot log on the UART.
 
 **TCP** (`CONFIG_ESPMIRROR_TCP=y`, on port 7331 with mDNS) binds to every
 address, so it listens on each network the app brings up, such as Wi-Fi or the
-USB network. The app starts Wi-Fi itself. Existing configurations with the
+USB network. The app starts Wi-Fi itself. The mirror keeps a hostname the app
+has already set and names the host `espmirror` otherwise. `mdns_init()` has no
+lock, so an app with its own mDNS starts it before `espmirror_start()`, not in
+another task at the same time. Existing configurations with the
 earlier name, `CONFIG_ESPMIRROR_WIFI`, keep TCP through `sdkconfig.rename`.
 The port has **no authentication**. Anyone who can reach it can
 see the screen, press keys, listen and talk. Leave TCP off in deployed images
