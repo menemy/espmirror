@@ -635,6 +635,7 @@ class Link:
         self.stopped = threading.Event()
         self.tx_lock = threading.Lock()
         self.sock = None
+        self.thread = self.writer_thread = None
         self.on_board = self.on_frame = self.on_status = lambda *a: None
 
     def start(self):
@@ -657,10 +658,50 @@ class Link:
     def take_back(self):
         self.taken = False
 
-    def close(self):
+    def stop(self):
         self.alive = False
+        self.live = False
         self.stopped.set()
-        self.disconnect()
+
+    def cancel(self):
+        """Wake transport IO without waiting for a worker or running its cleanup."""
+        try:
+            if self.cable:
+                if not self.tx_lock.acquire(blocking=False):
+                    return                  # serial reads/writes have timeouts; do not wait behind a writer
+                try:                        # cancel_read uses handles that serial.close also releases
+                    if self.sock is not None and hasattr(self.sock, 'cancel_read'):
+                        self.sock.cancel_read()
+                finally:
+                    self.tx_lock.release()
+            else:
+                sock = self.sock
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def join(self, timeout=None):
+        """Wait only; a reader can publish its writer after this call starts."""
+        current = threading.current_thread()
+        if current in (self.thread, self.writer_thread):
+            return False
+        deadline = None if timeout is None else time.monotonic() + max(0, timeout)
+        for name in ('thread', 'writer_thread'):
+            worker = getattr(self, name)
+            if worker is not None and worker.ident is not None:
+                worker.join(None if deadline is None else max(0, deadline - time.monotonic()))
+        return not any(worker is not None and worker.is_alive() for worker in (self.thread, self.writer_thread))
+
+    def close(self):
+        """Synchronous shutdown, including console output, unless called by a worker."""
+        self.stop()
+        try:
+            self.cancel()
+        finally:
+            self.join()
+        if self.thread is None:
+            self.disconnect()
 
     def disconnect(self):
         self.audio_capable = False
@@ -677,13 +718,20 @@ class Link:
                 try:
                     if self.cable:
                         sock.write(BREAK)
+                    else:
+                        sock.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
                 finally:
-                    sock.close()
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
 
 
     def status(self, text):
+        if self.stopped.is_set():
+            return
         self.live = not text
         self.on_status(text)
 
@@ -784,21 +832,26 @@ class Link:
     def run(self):
         while self.alive:
             if self.taken:
-                time.sleep(0.2)
+                self.stopped.wait(0.2)
                 continue
+            writer = None
             try:
                 self.status("connecting to %s" % self.host)
+                if not self.alive:
+                    break
                 sock = self.connect()
                 with self.tx_lock:
-                    if not self.alive:
-                        sock.close()
-                        break
                     self.sock = sock
+                    if not self.alive:
+                        break
                 while not self.out.empty():
                     self.out.get_nowait()
-                threading.Thread(target=self.writer, args=(sock,), daemon=True).start()
+                writer = self.writer_thread = threading.Thread(target=self.writer, args=(sock,), daemon=True)
+                writer.start()
                 while self.alive:
                     msg = self.receive()
+                    if not self.alive:
+                        break
                     kind = msg[:1]
                     if kind == b"B":
                         info = json.loads(msg[1:])
@@ -845,6 +898,8 @@ class Link:
                     self.status("%s: %s, retrying" % (self.host, e))
             finally:
                 self.disconnect()
+                if writer is not None:
+                    writer.join()
                 self.logs.flush()
             if self.alive and not self.taken:
                 self.stopped.wait(2)
@@ -875,11 +930,8 @@ class IrisLink(Link):
         if client:
             client.cancel()
 
-    def close(self):
-        super().close()
-        thread = getattr(self, "thread", None)
-        if thread and thread is not threading.current_thread():
-            thread.join(8)
+    def cancel(self):
+        self.disconnect()
 
     def writer(self, client):
         while self.alive and self.client is client and not client.closed:
@@ -913,6 +965,8 @@ class IrisLink(Link):
             writer = None
             try:
                 self.client = client
+                if not self.alive:
+                    break
                 self.status("connecting to %s" % self.host)
                 assembler = client.open()
                 if not self.alive:
@@ -926,7 +980,7 @@ class IrisLink(Link):
                 self.on_board(client.board)
                 self.status("")
                 prior_bytes = self.bytes_received
-                writer = threading.Thread(target=self.writer, args=(client,), daemon=True)
+                writer = self.writer_thread = threading.Thread(target=self.writer, args=(client,), daemon=True)
                 writer.start()
                 while self.alive:
                     frame = client.receive()
@@ -964,6 +1018,23 @@ def make_link(host, port=PORT, log_file=None, gateway=None):
     if host.startswith("iris:"):
         return IrisLink(host, port, log_file, gateway=gateway)
     return Link(host, port, log_file)
+
+
+def stop_links(links):
+    links = tuple(links)
+    for link in links:
+        link.stop()
+    for link in links:
+        link.cancel()
+
+
+def join_links(links, timeout=None):
+    deadline = None if timeout is None else time.monotonic() + max(0, timeout)
+    done = True
+    for link in links:
+        if not link.join(None if deadline is None else max(0, deadline - time.monotonic())):
+            done = False
+    return done
 
 
 def rgb565_to_rgb(fb):
@@ -1490,6 +1561,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             self.devs = [Dev(link) for link in links]
             self.zoom, self.ss, self.lay = scale, None, None
             self.zooming, self.zoomed_at = False, 0.0
+            self.closing = False
             self.flash_until, self.toast = 0.0, None
             self.settings = settings if settings is not None else settings_store()
             self.preferences = read_preferences(self.settings)
@@ -2250,7 +2322,12 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             rec["n"] = due
 
         def closeEvent(self, e):
-            if self.preferences["remember_position"]:
+            if self.closing:
+                e.accept()
+                return
+            self.closing = True
+            stop_links(links)
+            if self.preferences["remember_position"] and self.isVisible():
                 self.settings.setValue("position", self.pos())
             self.settings.sync()
             self.audio_io.close()
@@ -2258,8 +2335,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             if rec:
                 self.record()
                 rec["thread"].join(30)
-            for d in self.devs:
-                d.link.close()
+            join_links(links, timeout=1)
             super().closeEvent(e)
 
     links = [make_link(h, p, log_file=log_file, gateway=iris_gateway) for h, p in targets]
@@ -2269,24 +2345,31 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
     bridge.frame.connect(win.on_frame)
     bridge.status.connect(win.on_status)
     bridge.saved.connect(win.notice)
-    for i, link in enumerate(links):
-        link.on_board = lambda info, i=i: bridge.board.emit(i, info)
-        link.on_frame = lambda i=i: bridge.frame.emit(i)
-        link.on_status = lambda text, i=i: bridge.status.emit(i, text)
-        link.start()
-    if sys.platform == "darwin":                              # the View menu in the menu bar too
-        bar = QMenuBar(None)
-        win.fill_menu(bar.addMenu("View")).addAction(win.quit_act)
-        win.menu_bar = bar
-    win.apply_zoom(scale, say=False)
-    win.restore_position()
-    win.show()
-    win.raise_()
-    win.activateWindow()
-    win.windowHandle().screenChanged.connect(win.screen_changed)
-    win.refresh_icon()
-    win.icon_timer.start()
-    return app.exec()
+    try:
+        for i, link in enumerate(links):
+            link.on_board = lambda info, i=i: bridge.board.emit(i, info)
+            link.on_frame = lambda i=i: bridge.frame.emit(i)
+            link.on_status = lambda text, i=i: bridge.status.emit(i, text)
+            link.start()
+        if sys.platform == "darwin":                          # the View menu in the menu bar too
+            bar = QMenuBar(None)
+            win.fill_menu(bar.addMenu("View")).addAction(win.quit_act)
+            win.menu_bar = bar
+        win.apply_zoom(scale, say=False)
+        win.restore_position()
+        win.show()
+        win.raise_()
+        win.activateWindow()
+        win.windowHandle().screenChanged.connect(win.screen_changed)
+        win.refresh_icon()
+        win.icon_timer.start()
+        return app.exec()
+    finally:
+        try:
+            if not win.closing:
+                win.close()
+        finally:
+            join_links(links)                # keep Qt objects and stdout alive until every worker has finished
 
 
 def parse_host(text):
@@ -2381,8 +2464,9 @@ def main():
     if args.stats:
         if args.seconds <= 0:
             ap.error("--seconds must be positive")
-        link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway).start()
+        link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway)
         try:
+            link.start()
             start = time.monotonic()
             time.sleep(args.seconds)
             elapsed = time.monotonic() - start
@@ -2397,9 +2481,10 @@ def main():
     if args.png:
         link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway)
         link.on_status = lambda text: text and not text.startswith("connecting") and print(text, file=sys.stderr)
-        code = save_png(link.start(), args.png)
-        link.close()
-        return code
+        try:
+            return save_png(link.start(), args.png)
+        finally:
+            link.close()
     devices = args.devices or os.path.join(os.path.dirname(os.path.abspath(__file__)), "devices")
     if args.devices and not os.path.isdir(args.devices):
         print("no such directory: %s" % args.devices, file=sys.stderr)
