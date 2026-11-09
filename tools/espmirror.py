@@ -223,6 +223,7 @@ class ConsoleLog:
     def __init__(self, port, file=None):
         self.port, self.file = port, file
         self.pending = bytearray()
+        self.discarding = False
 
     def feed(self, data):
         self.pending += data
@@ -230,9 +231,26 @@ class ConsoleLog:
             end = self.pending.find(b'\n')
             end = end + 1 if 0 <= end < 4096 else min(4096, len(self.pending))
             raw = bytes(self.pending[:end])
+            if self.discarding:
+                del self.pending[:end]
+                self.discarding = not raw.endswith(b'\n')
+                continue
+            try:
+                text = raw.decode('utf-8')
+            except UnicodeDecodeError as error:
+                if end == 4096 and error.reason == 'unexpected end of data':
+                    end = error.start       # leave a split UTF-8 character for the next chunk
+                    text = raw[:end].decode('utf-8')
+                else:
+                    del self.pending[:end]
+                    self.discarding = not raw.endswith(b'\n')
+                    continue
             del self.pending[:end]
+            if any(not c.isprintable() and c not in '\t\r\n\x1b' for c in text):
+                self.discarding = not raw.endswith(b'\n')
+                continue                    # a reconnect can start in the middle of an old binary frame
             line = '[%s %s] %s' % (time.strftime('%Y-%m-%d %H:%M:%S'), self.port,
-                                   raw.decode('utf-8', errors='replace').rstrip('\r\n'))
+                                   text.rstrip('\r\n'))
             with _LOG_LOCK:
                 print(line, flush=True)
                 if self.file:
@@ -260,6 +278,8 @@ class CableDemux:
         self.recovering = False
         self.fragment = bytearray()
         self.line_start = False
+        self.marker = None
+        self.marked = False
 
     def text(self, data):
         if not self.recovering:
@@ -283,8 +303,20 @@ class CableDemux:
         messages = []
         while self.buffer:
             start = self.buffer.find(SYNC)
+            marker = self.buffer.find(self.marker) if self.marker else -1
+            if marker >= 0 and (start < 0 or marker < start):
+                self.text(bytes(self.buffer[:marker]))
+                del self.buffer[:marker + len(self.marker)]
+                self.marked = True
+                break
             if start < 0:
-                n = len(self.buffer) - (self.buffer[-1:] == SYNC[:1])
+                keep = 0
+                for prefix in (SYNC, self.marker):
+                    if prefix:
+                        for size in range(1, len(prefix)):
+                            if self.buffer.endswith(prefix[:size]):
+                                keep = max(keep, size)
+                n = len(self.buffer) - keep
                 self.text(bytes(self.buffer[:n]))
                 del self.buffer[:n]
                 self.since = None
@@ -387,29 +419,32 @@ def usb_serial_mac(value):
     return ":".join(digits[i:i + 2] for i in range(0, 12, 2))
 
 
-def open_serial(port, wait=5.0, on_text=None):
+def open_serial(port, wait=5.0, on_text=None, demux=None):
     """The board's console as the mirror's link: ">mirror", then everything after the marker is the protocol."""
     ser = open_usb_serial(port)
     ser.timeout = 0.1
     on_text = on_text or (lambda data: None)
+    demux = demux or CableDemux(on_text, lambda: None)
     try:
         ser.write(BREAK)
         time.sleep(0.5)              # longer than the pause the board waits for before it reads commands again
-        on_text(ser.read(ser.in_waiting))
+        started = time.monotonic()
+        demux.feed(ser.read(ser.in_waiting), now=started)
         ser.write(b"\n>mirror\n")
-        seen, end = bytearray(), time.monotonic() + wait
-        while True:
-            if time.monotonic() > end:
-                on_text(bytes(seen))
+        demux.marker = MARK           # a marker inside a stale CRC-framed payload is not the new handshake
+        end = started + wait
+        while not demux.marked:
+            now = time.monotonic()
+            if now > end:
+                demux.feed(b'', now=now)
                 raise ConnectionError("No mirror reply on %s within %.1f s. Check that this is the board's USB Serial/JTAG port, "
                                       "flash firmware built with CONFIG_ESPMIRROR_USB=y or CONFIG_ESPMIRROR_USB_NETWORK=y, and close idf.py monitor or other viewers." % (port, wait))
-            seen += ser.read(1)
-            if seen.endswith(MARK):
-                on_text(bytes(seen[:-len(MARK)]))
-                break
-            if len(seen) > len(MARK):
-                on_text(bytes(seen[:-len(MARK)]))
-                del seen[:-len(MARK)]
+            demux.feed(ser.read(1), now=now)
+        demux.marker = None
+        demux.marked = demux.recovering = False
+        demux.since = None
+        demux.fragment.clear()
+        demux.line_start = False
         return ser
     except BaseException:
         ser.close()
@@ -753,7 +788,7 @@ class Link:
             self.incoming = []
             self.refresh_pending = False
             self.demux = CableDemux(self.logs.feed, self.refresh)
-            return open_serial(self.host, on_text=self.logs.feed)
+            return open_serial(self.host, on_text=self.logs.feed, demux=self.demux)
         sock = socket.create_connection((self.host, self.port), timeout=5)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         sock.settimeout(6)       # the board sends a frame a second at least
