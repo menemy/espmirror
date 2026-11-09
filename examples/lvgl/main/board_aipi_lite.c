@@ -203,7 +203,7 @@ void board_speaker_write(const int16_t *mono, size_t frames) {
     }
 }
 
-#else
+#elif CONFIG_EXAMPLE_BOARD_NONE
 
 void board_init(void) {}
 

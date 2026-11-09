@@ -1,0 +1,253 @@
+/*
+ * Copyright (c) 2026 Maksim Nagaev
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include "board.h"
+#include "sdkconfig.h"
+
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216
+
+#include "board_keys.h"
+#include "driver/gpio.h"
+#include "driver/i2c_master.h"
+#include "driver/i2s_std.h"
+#include "driver/spi_master.h"
+#include "esp_check.h"
+#include "esp_codec_dev.h"
+#include "esp_codec_dev_defaults.h"
+#include "esp_lcd_co5300.h"
+#include "esp_lcd_panel_ops.h"
+#include "esp_lcd_touch_cst9220.h"
+#include "esp_timer.h"
+#include "espmirror.h"
+
+static const char *TAG = "waveshare216";
+static i2c_master_bus_handle_t s_i2c;
+static i2c_master_dev_handle_t s_pmu;
+static esp_lcd_panel_handle_t s_panel;
+static esp_lcd_touch_handle_t s_touch;
+static esp_codec_dev_handle_t s_spk, s_mic;
+
+static esp_err_t pmu_read(uint8_t reg, uint8_t *value) {
+    return i2c_master_transmit_receive(s_pmu, &reg, 1, value, 1, 20);
+}
+
+static esp_err_t pmu_write(uint8_t reg, uint8_t value) {
+    const uint8_t bytes[] = {reg, value};
+    return i2c_master_transmit(s_pmu, bytes, sizeof(bytes), 20);
+}
+
+void board_init(void) {
+    const gpio_config_t keys = {
+        .pin_bit_mask = (1ULL << 0) | (1ULL << 18), .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&keys));
+    const i2c_master_bus_config_t bus = {
+        .i2c_port = I2C_NUM_0, .sda_io_num = 15, .scl_io_num = 14,
+        .clk_source = I2C_CLK_SRC_DEFAULT, .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus, &s_i2c));
+    const i2c_device_config_t pmu = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x34, .scl_speed_hz = 400000,
+    };
+    ESP_ERROR_CHECK(i2c_master_bus_add_device(s_i2c, &pmu, &s_pmu));
+    uint8_t value;
+    /* ALDO1 supplies the codecs at 3.3 V; keep the other rails unchanged. */
+    ESP_ERROR_CHECK(pmu_read(0x92, &value));
+    ESP_ERROR_CHECK(pmu_write(0x92, (value & 0xE0) | 28));
+    ESP_ERROR_CHECK(pmu_read(0x90, &value));
+    ESP_ERROR_CHECK(pmu_write(0x90, value | 1));
+    /* PWR has no GPIO: enable both latched edges and drain the boot press. */
+    ESP_ERROR_CHECK(pmu_read(0x41, &value));
+    ESP_ERROR_CHECK(pmu_write(0x41, value | 3));
+    ESP_ERROR_CHECK(pmu_write(0x49, 3));
+}
+
+unsigned board_keys_down(void) {
+    static board_key_filter_t keys;
+    static bool power, release_next;
+    if (release_next) {
+        power = false;
+        release_next = false;
+    } else {
+        uint8_t edges;
+        if (pmu_read(0x49, &edges) != ESP_OK) {
+            power = false;
+        } else if ((edges &= 3) && pmu_write(0x49, edges) == ESP_OK) {
+            /* A complete tap between polls still gets one press and one release. */
+            if (edges == 3) {
+                power = true;
+                release_next = true;
+            } else {
+                power = (edges & 2) != 0;
+            }
+        }
+    }
+    unsigned raw = (gpio_get_level(18) == 0 ? 1u << ESPMIRROR_KEY_AUX : 0)
+                 | (gpio_get_level(0) == 0 ? 1u << ESPMIRROR_KEY_MAIN : 0);
+    return board_key_filter(&keys, raw, esp_timer_get_time()) | (power ? 1u << ESPMIRROR_KEY_POWER : 0);
+}
+
+/* Register values and delays from Waveshare's 2.16 BSP, revision bfeb6e6. */
+static const co5300_lcd_init_cmd_t s_init[] = {
+    {0x11, NULL, 0, 600},
+    {0xFE, (uint8_t[]){0x20}, 1, 0},
+    {0x19, (uint8_t[]){0x10}, 1, 0},
+    {0x1C, (uint8_t[]){0xA0}, 1, 0},
+    {0xFE, (uint8_t[]){0x00}, 1, 0},
+    {0xC4, (uint8_t[]){0x80}, 1, 0},
+    {0x3A, (uint8_t[]){0x55}, 1, 0},
+    {0x35, (uint8_t[]){0x00}, 1, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    {0x51, (uint8_t[]){0xFF}, 1, 0},
+    {0x63, (uint8_t[]){0xFF}, 1, 0},
+    {0x2A, (uint8_t[]){0, 0, 1, 0xDF}, 4, 0},
+    {0x2B, (uint8_t[]){0, 0, 1, 0xDF}, 4, 0},
+    {0x36, (uint8_t[]){0xA0}, 1, 0},
+    {0x29, NULL, 0, 600},
+};
+
+static bool flush_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *event, void *user) {
+    (void)io;
+    (void)event;
+    lv_display_flush_ready(user);
+    return false;
+}
+
+static void flush(lv_display_t *disp, const lv_area_t *area, uint8_t *pixels) {
+    lv_draw_sw_rgb565_swap(pixels, lv_area_get_size(area));
+    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, area->x1, area->y1,
+                                             area->x2 + 1, area->y2 + 1, pixels));
+    (void)disp;
+}
+
+static void align_area(lv_event_t *event) {
+    /* CO5300 update windows must start even and end odd. */
+    lv_area_t *area = lv_event_get_param(event);
+    area->x1 &= ~1;
+    area->y1 &= ~1;
+    area->x2 |= 1;
+    area->y2 |= 1;
+}
+
+static void touch_read(lv_indev_t *indev, lv_indev_data_t *data) {
+    (void)indev;
+    esp_lcd_touch_point_data_t point;
+    uint8_t count = 0;
+    data->state = LV_INDEV_STATE_RELEASED;
+    if (esp_lcd_touch_read_data(s_touch) == ESP_OK
+        && esp_lcd_touch_get_data(s_touch, &point, &count, 1) == ESP_OK && count
+        && point.x < 480 && point.y < 480) {
+        data->point.x = point.x;
+        data->point.y = point.y;
+        data->state = LV_INDEV_STATE_PRESSED;
+    }
+}
+
+esp_err_t board_display_start(lv_display_t *disp) {
+    const spi_bus_config_t bus = CO5300_PANEL_BUS_QSPI_CONFIG(38, 4, 5, 6, 7, 480 * 40 * 2);
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO), TAG, "SPI");
+    esp_lcd_panel_io_handle_t io;
+    const esp_lcd_panel_io_spi_config_t io_cfg = CO5300_PANEL_IO_QSPI_CONFIG(12, flush_done, disp);
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_cfg, &io), TAG, "panel IO");
+    const co5300_vendor_config_t vendor = {
+        .init_cmds = s_init, .init_cmds_size = sizeof(s_init) / sizeof(s_init[0]),
+        .flags.use_qspi_interface = true,
+    };
+    const esp_lcd_panel_dev_config_t panel = {
+        .reset_gpio_num = 39, .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16, .vendor_config = (void *)&vendor,
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_co5300(io, &panel, &s_panel), TAG, "CO5300");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
+    lv_display_add_event_cb(disp, align_area, LV_EVENT_INVALIDATE_AREA, NULL);
+    lv_display_set_flush_cb(disp, flush);
+
+    esp_lcd_panel_io_handle_t touch_io;
+    const esp_lcd_panel_io_i2c_config_t touch_bus = ESP_LCD_TOUCH_IO_I2C_CST9220_CONFIG();
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_i2c(s_i2c, &touch_bus, &touch_io), TAG, "touch IO");
+    const esp_lcd_touch_config_t touch = {
+        .x_max = 479, .y_max = 479, .rst_gpio_num = 40, .int_gpio_num = 11,
+        .flags = {.swap_xy = true, .mirror_y = true},
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_touch_new_i2c_cst9220(touch_io, &touch, &s_touch), TAG, "CST9220");
+    lv_indev_t *input = lv_indev_create();
+    ESP_RETURN_ON_FALSE(input, ESP_ERR_NO_MEM, TAG, "touch input");
+    lv_indev_set_type(input, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_display(input, disp);
+    lv_indev_set_read_cb(input, touch_read);
+    return ESP_OK;
+}
+
+esp_err_t board_audio_start(void) {
+#if CONFIG_ESPMIRROR_AUDIO
+    i2s_chan_handle_t tx, rx;
+    i2s_chan_config_t channels = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+    channels.auto_clear = true;
+    ESP_RETURN_ON_ERROR(i2s_new_channel(&channels, &tx, &rx), TAG, "I2S channels");
+    const i2s_std_config_t bus = {
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
+        .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+        .gpio_cfg = {.mclk = 42, .bclk = 9, .ws = 45, .dout = 8, .din = 10},
+    };
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(tx, &bus), TAG, "I2S TX");
+    ESP_RETURN_ON_ERROR(i2s_channel_init_std_mode(rx, &bus), TAG, "I2S RX");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(tx), TAG, "TX enable");
+    ESP_RETURN_ON_ERROR(i2s_channel_enable(rx), TAG, "RX enable");
+    audio_codec_i2s_cfg_t data_cfg = {.port = I2S_NUM_0, .tx_handle = tx, .rx_handle = rx};
+    const audio_codec_data_if_t *data = audio_codec_new_i2s_data(&data_cfg);
+    audio_codec_i2c_cfg_t ctrl_cfg = {.port = I2C_NUM_0, .bus_handle = s_i2c, .addr = ES8311_CODEC_DEFAULT_ADDR};
+    const audio_codec_ctrl_if_t *dac_ctrl = audio_codec_new_i2c_ctrl(&ctrl_cfg);
+    ctrl_cfg.addr = ES7210_CODEC_DEFAULT_ADDR;
+    const audio_codec_ctrl_if_t *adc_ctrl = audio_codec_new_i2c_ctrl(&ctrl_cfg);
+    const audio_codec_gpio_if_t *gpio = audio_codec_new_gpio();
+    ESP_RETURN_ON_FALSE(data && dac_ctrl && adc_ctrl && gpio, ESP_ERR_NO_MEM, TAG, "codec interfaces");
+    es8311_codec_cfg_t dac_cfg = {
+        .ctrl_if = dac_ctrl, .gpio_if = gpio, .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC,
+        .pa_pin = 46, .use_mclk = true, .hw_gain = {.pa_voltage = 5.0, .codec_dac_voltage = 3.3},
+    };
+    es7210_codec_cfg_t adc_cfg = {.ctrl_if = adc_ctrl, .mic_selected = ES7210_SEL_MIC1 | ES7210_SEL_MIC2};
+    const audio_codec_if_t *dac = es8311_codec_new(&dac_cfg);
+    const audio_codec_if_t *adc = es7210_codec_new(&adc_cfg);
+    ESP_RETURN_ON_FALSE(dac && adc, ESP_FAIL, TAG, "codec init");
+    esp_codec_dev_cfg_t speaker = {.dev_type = ESP_CODEC_DEV_TYPE_OUT, .codec_if = dac, .data_if = data};
+    esp_codec_dev_cfg_t microphone = {.dev_type = ESP_CODEC_DEV_TYPE_IN, .codec_if = adc, .data_if = data};
+    s_spk = esp_codec_dev_new(&speaker);
+    s_mic = esp_codec_dev_new(&microphone);
+    ESP_RETURN_ON_FALSE(s_spk && s_mic, ESP_ERR_NO_MEM, TAG, "codec devices");
+    esp_codec_dev_sample_info_t format = {.sample_rate = 16000, .channel = 2, .bits_per_sample = 16};
+    ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_spk, &format), TAG, "speaker open");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_mic, &format), TAG, "mic open");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_out_vol(s_spk, 60), TAG, "speaker volume");
+    ESP_RETURN_ON_ERROR(esp_codec_dev_set_in_gain(s_mic, 24), TAG, "mic gain");
+    return ESP_OK;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+size_t board_mic_read(int16_t *mono, size_t frames) {
+    if (!s_mic || frames > 320) return 0;
+    int16_t stereo[640];
+    if (esp_codec_dev_read(s_mic, stereo, frames * 4) != ESP_CODEC_DEV_OK) return 0;
+    for (size_t i = 0; i < frames; i++) mono[i] = ((int32_t)stereo[i * 2] + stereo[i * 2 + 1]) / 2;
+    return frames;
+}
+
+void board_speaker_write(const int16_t *mono, size_t frames) {
+    if (!s_spk) return;
+    int16_t stereo[640];
+    while (frames) {
+        size_t count = frames < 320 ? frames : 320;
+        for (size_t i = 0; i < count; i++) stereo[i * 2] = stereo[i * 2 + 1] = mono[i];
+        if (esp_codec_dev_write(s_spk, stereo, count * 4) != ESP_CODEC_DEV_OK) return;
+        mono += count;
+        frames -= count;
+    }
+}
+
+#endif

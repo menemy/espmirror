@@ -37,6 +37,9 @@ docs/protocol.md and must document compatibility and update the protocol version
 A change to the encoders gets a run of `tests/bench_espmirror.py`; docs/bench.md
 says what it measures and what it does not.
 
-Build basic and lvgl for `esp32s3` and `esp32`. CI checks those on ESP-IDF
-5.1, 5.4 and 6.0 (LVGL needs 5.4+), and virtual on `esp32s3` with 5.4 and
-6.0.1, plus its USB network and ESP-Mosaico screen variants on 6.0.1. The virtual example needs no network credentials or panel.
+Build basic and lvgl for `esp32s3` and `esp32`. CI is configured for basic on
+ESP-IDF 5.1, 5.4 and 6.0, and lvgl on 5.4.3 and 6.0. The lvgl example needs
+ESP-IDF 5.4.3 or later for Kconfig-conditional panel dependencies; its Waveshare
+2.16 variant has 5.4.3 and 6.0.1 jobs. Virtual on `esp32s3` has 5.4 and 6.0.1
+jobs, plus its USB network and ESP-Mosaico screen variants on 6.0.1. The virtual
+example needs no network credentials or panel.

@@ -12,29 +12,42 @@ menu "espmirror example"
 
         config EXAMPLE_BOARD_AIPI_LITE
             bool "XOrigin AIPI Lite (ESP32-S3, 128 x 128 ST7789)"
+
+        config EXAMPLE_BOARD_WAVESHARE_216
+            bool "Waveshare AMOLED 2.16 (ESP32-S3, 480 x 480 CO5300)"
+            depends on IDF_TARGET_ESP32S3
     endchoice
+
+    config EXAMPLE_BOARD_ID
+        string
+        default "waveshare_216" if EXAMPLE_BOARD_WAVESHARE_216
+        default "none"
 
     config EXAMPLE_MIRROR_NAME
         string "The board's name for the viewer"
         default "AIPI Lite" if EXAMPLE_BOARD_AIPI_LITE
+        default "Waveshare 2.16" if EXAMPLE_BOARD_WAVESHARE_216
         default "espmirror lvgl"
         help
             The viewer draws a device it knows ("Waveshare 2.16", "Waveshare 1.54G",
             "Waveshare 1.75C", "AIPI Lite"); any other name gets a plain frame.
 
     config EXAMPLE_MIRROR_WIDTH
-        int "Screen width, pixels"
+        int "Screen width, pixels" if !EXAMPLE_BOARD_WAVESHARE_216
+        default 480 if EXAMPLE_BOARD_WAVESHARE_216
         default 128 if EXAMPLE_BOARD_AIPI_LITE
         default 240
 
     config EXAMPLE_MIRROR_HEIGHT
-        int "Screen height, pixels"
+        int "Screen height, pixels" if !EXAMPLE_BOARD_WAVESHARE_216
+        default 480 if EXAMPLE_BOARD_WAVESHARE_216
         default 128 if EXAMPLE_BOARD_AIPI_LITE
         default 240
 
     config EXAMPLE_MIRROR_PPI
         int "Pixels per inch (for the viewer's real-size mode)"
         default 126 if EXAMPLE_BOARD_AIPI_LITE
+        default 314 if EXAMPLE_BOARD_WAVESHARE_216
         default 200
 
 endmenu

@@ -4,3 +4,11 @@ dependencies:
     override_path: "../../.."
   lvgl/lvgl: "^9.5"
   espressif/esp_codec_dev: "^1.3"
+  espressif/esp_lcd_co5300:
+    version: "2.2.0"
+    rules:
+      - if: '$CONFIG{EXAMPLE_BOARD_ID} == "waveshare_216"'
+  espressif/esp_lcd_touch_cst9220:
+    version: "0.1.1"
+    rules:
+      - if: '$CONFIG{EXAMPLE_BOARD_ID} == "waveshare_216"'

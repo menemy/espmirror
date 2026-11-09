@@ -33,6 +33,7 @@
 
 #include "board.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_random.h"
@@ -105,25 +106,45 @@ static bool synth(int sound, float t, int16_t *out) {
 
 static bool s_has_audio;             /* the board's codec is up: the speaker plays, the microphone reads */
 static bool s_mic_toggle;            /* the on-screen mic button */
+static bool s_listen_mic, s_talking;
+typedef struct { size_t count; int16_t pcm[CHUNK]; } talk_chunk_t;
+static QueueHandle_t s_talk;
 static volatile unsigned s_keys_held;   /* keys down, from the viewer and the board, a bit per code */
 
 static void sound_task(void *arg) {
     (void)arg;
-    int16_t pcm[CHUNK];
+    talk_chunk_t audio;
+    int sound = SOUND_NONE;
+    float t = 0;
+    TickType_t next = xTaskGetTickCount(), period = pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : 1;
     for (;;) {
-        int sound;
-        if (xQueueReceive(s_sounds, &sound, portMAX_DELAY) != pdTRUE) continue;
-        __atomic_store_n(&s_playing, true, __ATOMIC_RELAXED);
-        espmirror_set_led(ESPMIRROR_LED_ON);
-        TickType_t next = xTaskGetTickCount(), period = pdMS_TO_TICKS(20) ? pdMS_TO_TICKS(20) : 1;
-        for (float t = 0; synth(sound, t, pcm); t += (float)CHUNK / RATE) {
-            espmirror_audio_playback(pcm, CHUNK, 1);
-            tap_put(pcm, CHUNK);
-            if (s_has_audio) board_speaker_write(pcm, CHUNK);   /* paced by the codec; the delay keeps the viewer's pace */
-            vTaskDelayUntil(&next, period);
+        bool playing = false;
+        bool talking = __atomic_load_n(&s_talking, __ATOMIC_RELAXED);
+        if (talking) {
+            sound = SOUND_NONE;
+            if (xQueueReceive(s_talk, &audio, period) == pdTRUE
+                && __atomic_load_n(&s_talking, __ATOMIC_RELAXED)) {
+                board_speaker_write(audio.pcm, audio.count);
+                espmirror_audio_playback(audio.pcm, audio.count, 1);
+                playing = true;
+            }
+        } else {
+            if (sound == SOUND_NONE && xQueueReceive(s_sounds, &sound, 0) == pdTRUE) t = 0;
+            playing = sound != SOUND_NONE && synth(sound, t, audio.pcm);
+            if (playing) {
+                espmirror_audio_playback(audio.pcm, CHUNK, 1);
+                tap_put(audio.pcm, CHUNK);
+                if (s_has_audio) board_speaker_write(audio.pcm, CHUNK);
+                t += (float)CHUNK / RATE;
+            } else sound = SOUND_NONE;
         }
-        __atomic_store_n(&s_playing, false, __ATOMIC_RELAXED);
-        espmirror_set_led(ESPMIRROR_LED_BLINK_SLOW);
+        if (playing != __atomic_load_n(&s_playing, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&s_playing, playing, __ATOMIC_RELAXED);
+            espmirror_set_led(playing ? ESPMIRROR_LED_ON : ESPMIRROR_LED_BLINK_SLOW);
+        }
+        /* The codec paces Talk, including packets shorter than 20 ms. */
+        if (talking) next = xTaskGetTickCount();
+        else vTaskDelayUntil(&next, period);
     }
 }
 
@@ -133,7 +154,8 @@ static void play(int sound) {
 
 /* The board's microphone, while asked for: to the spectrogram and to the viewer's Mic. */
 static bool mic_wanted(void) {
-    return s_has_audio && (__atomic_load_n(&s_mic_toggle, __ATOMIC_RELAXED)
+    return s_has_audio && (__atomic_load_n(&s_listen_mic, __ATOMIC_RELAXED)
+                           || __atomic_load_n(&s_mic_toggle, __ATOMIC_RELAXED)
                            || (__atomic_load_n(&s_keys_held, __ATOMIC_RELAXED) & 1u << ESPMIRROR_KEY_MAIN));
 }
 
@@ -155,17 +177,28 @@ static void mic_task(void *arg) {
     }
 }
 
-/* The viewer talks into the board: its microphone goes to the spectrogram
- * (and would go to a speaker). */
+static void on_listen(int source, void *user) {
+    (void)user;
+    __atomic_store_n(&s_listen_mic, source == 1, __ATOMIC_RELAXED);
+}
+
 static bool on_talk(bool on, void *user) {
     (void)user;
     ESP_LOGI(TAG, "viewer %s", on ? "talks" : "stopped talking");
+    if (on && !s_has_audio) return false;
+    __atomic_store_n(&s_talking, on, __ATOMIC_RELAXED);
+    xQueueReset(s_talk);
     return true;
 }
 
 static void on_talk_audio(const int16_t *mono, size_t samples, void *user) {
     (void)user;
     tap_put(mono, samples);
+    if (!__atomic_load_n(&s_talking, __ATOMIC_RELAXED) || samples > CHUNK) return;
+    talk_chunk_t chunk = {.count = samples};
+    memcpy(chunk.pcm, mono, samples * sizeof(*mono));
+    /* The mirror task must never wait for the codec or an overloaded speaker. */
+    xQueueSend(s_talk, &chunk, 0);
 }
 
 /* ---- Keys and touch from the viewer ------------------------------------------- */
@@ -176,8 +209,8 @@ static struct { int x, y; bool down; } s_pointer;
 static portMUX_TYPE s_pointer_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void key_event(int key, bool down) {
-    unsigned held = __atomic_load_n(&s_keys_held, __ATOMIC_RELAXED);
-    __atomic_store_n(&s_keys_held, down ? held | 1u << key : held & ~(1u << key), __ATOMIC_RELAXED);
+    if (down) __atomic_fetch_or(&s_keys_held, 1u << key, __ATOMIC_RELAXED);
+    else __atomic_fetch_and(&s_keys_held, ~(1u << key), __ATOMIC_RELAXED);
     int ev = key << 1 | (down ? 1 : 0);
     if (xQueueSend(s_keys, &ev, 0) != pdTRUE) __atomic_store_n(&s_keys_lost, true, __ATOMIC_RELAXED);
 }
@@ -210,7 +243,7 @@ static void on_pointer(int x, int y, bool down, void *user) {
 
 static SemaphoreHandle_t s_lv_lock;
 static lv_obj_t *s_leds[4], *s_ripple, *s_status, *s_canvas, *s_mic_btn;
-LV_DRAW_BUF_DEFINE_STATIC(s_spec_buf, SPEC_W, SPEC_H, LV_COLOR_FORMAT_RGB565);
+static lv_draw_buf_t s_spec_buf;
 
 static void button_event(lv_event_t *e) {
     play((int)(intptr_t)lv_event_get_user_data(e));
@@ -365,7 +398,13 @@ static void build_ui(void) {
     lv_anim_start(&a);
 
     /* The spectrogram, scrolling left. */
-    LV_DRAW_BUF_INIT_STATIC(s_spec_buf);
+    uint32_t stride = lv_draw_buf_width_to_stride(SPEC_W, LV_COLOR_FORMAT_RGB565);
+    size_t bytes = stride * SPEC_H;
+    void *pixels = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!pixels) pixels = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    ESP_ERROR_CHECK(pixels ? ESP_OK : ESP_ERR_NO_MEM);
+    ESP_ERROR_CHECK(lv_draw_buf_init(&s_spec_buf, SPEC_W, SPEC_H, LV_COLOR_FORMAT_RGB565,
+                                    stride, pixels, bytes) == LV_RESULT_OK ? ESP_OK : ESP_FAIL);
     s_canvas = lv_canvas_create(scr);
     lv_canvas_set_draw_buf(s_canvas, &s_spec_buf);
     lv_canvas_fill_bg(s_canvas, lv_color_hex(0x0b0c10), LV_OPA_COVER);
@@ -521,15 +560,30 @@ void app_main(void) {
     ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
+#if CONFIG_EXAMPLE_CONNECT_WIFI || CONFIG_EXAMPLE_CONNECT_ETHERNET
     ESP_ERROR_CHECK(example_connect());
+#endif
 
     s_sounds = xQueueCreate(8, sizeof(int));
+    s_talk = xQueueCreate(4, sizeof(talk_chunk_t));
     s_keys = xQueueCreate(16, sizeof(int));
     s_lv_lock = xSemaphoreCreateMutex();
-    if (!s_sounds || !s_keys || !s_lv_lock) {
+    if (!s_sounds || !s_talk || !s_keys || !s_lv_lock) {
         ESP_LOGE(TAG, "no memory for the queues");
         return;
     }
+#if CONFIG_ESPMIRROR_AUDIO
+    err = board_audio_start();
+    s_has_audio = err == ESP_OK;
+    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_ERROR_CHECK(err);
+#endif
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216
+    static const espmirror_button_t buttons[] = {
+        {ESPMIRROR_KEY_AUX, "KEY", -1, -1},
+        {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
+        {ESPMIRROR_KEY_POWER, "PWR", -1, -1},
+    };
+#endif
     const espmirror_config_t cfg = {
         .name = CONFIG_EXAMPLE_MIRROR_NAME,
         .width = W,
@@ -538,24 +592,29 @@ void app_main(void) {
         .corner_radius = 0,
         .on_key = on_key,
         .on_pointer = on_pointer,
+        .on_listen = on_listen,
         .on_talk = on_talk,
         .on_talk_audio = on_talk_audio,
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216
+        .buttons = buttons,
+        .button_count = sizeof(buttons) / sizeof(buttons[0]),
+#endif
     };
     ESP_ERROR_CHECK(espmirror_start(&cfg));
     espmirror_set_led(ESPMIRROR_LED_BLINK_SLOW);
-    err = board_audio_start();                        /* the board's codec, when the example knows it */
-    s_has_audio = err == ESP_OK;
-    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_LOGW(TAG, "the codec did not start: %s", esp_err_to_name(err));
 
     lv_init();
     lv_tick_set_cb(tick_ms);
-    static uint8_t buf[W * 40 * 2] __attribute__((aligned(LV_DRAW_BUF_ALIGN)));
+    size_t buf_bytes = W * 40 * 2;
+    void *buf = heap_caps_aligned_alloc(LV_DRAW_BUF_ALIGN, buf_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    ESP_ERROR_CHECK(buf ? ESP_OK : ESP_ERR_NO_MEM);
     lv_display_t *disp = lv_display_create(W, H);
+    ESP_ERROR_CHECK(disp ? ESP_OK : ESP_ERR_NO_MEM);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565);
-    lv_display_set_buffers(disp, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
+    lv_display_set_buffers(disp, buf, NULL, buf_bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_flush_cb(disp, flush_cb);
     err = board_display_start(disp);                 /* the board's panel, when the example knows it */
-    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_LOGW(TAG, "the panel did not start: %s", esp_err_to_name(err));
+    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(espmirror_attach_lvgl(disp));
 
     build_ui();
@@ -565,5 +624,5 @@ void app_main(void) {
         ESP_LOGE(TAG, "no memory for the tasks");
         return;
     }
-    ESP_LOGI(TAG, "run tools/espmirror.py <this board's IP> --sound on your computer");
+    ESP_LOGI(TAG, "run tools/espmirror.py --sound on your computer");
 }

@@ -14,11 +14,33 @@ jobs:
         idf: ["v5.1", "v5.4", "v6.0"]
         example: [basic, lvgl]
         target: [esp32s3, esp32]
+        variant: [default]
         exclude:
           # The registry's LVGL manifest needs component manager 2 (ESP-IDF 5.4+).
           - idf: "v5.1"
             example: lvgl
+          # Kconfig-conditional panel dependencies need the 5.4.3 build-system backport.
+          - idf: "v5.4"
+            example: lvgl
         include:
+          - idf: "v5.4.3"
+            example: lvgl
+            target: esp32
+            variant: default
+          - idf: "v5.4.3"
+            example: lvgl
+            target: esp32s3
+            variant: default
+          - idf: "v5.4.3"
+            example: lvgl
+            target: esp32s3
+            variant: waveshare-216
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-216"
+          - idf: "v6.0.1"
+            example: lvgl
+            target: esp32s3
+            variant: waveshare-216
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-216"
           - idf: "v5.4"
             example: virtual
             target: esp32s3
@@ -36,7 +58,7 @@ jobs:
             defaults: "sdkconfig.defaults;sdkconfig.mosaico"
     steps:
       - uses: actions/checkout@v5
-      - name: Build ${{ matrix.example }} for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
+      - name: Build ${{ matrix.example }} (${{ matrix.variant || 'default' }}) for ${{ matrix.target }} on ESP-IDF ${{ matrix.idf }}
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: ${{ matrix.idf }}
