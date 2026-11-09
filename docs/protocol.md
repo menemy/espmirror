@@ -10,47 +10,98 @@ application authentication or encryption. TCP is an explicit developer option.
 
 ### ESP-Iris
 
-`CONFIG_ESPMIRROR_IRIS=y` registers a screen backend and three RPC methods
+`CONFIG_ESPMIRROR_IRIS=y` registers a screen backend and four RPC methods
 with the application's `esp_iris` component. Call `espmirror_start()` before
-`esp_iris_start()`. The application owns the Iris transport and recovery
-services. `CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES` must hold a full RGB565 row
-(`width * 2` bytes).
+`esp_iris_start()`. The application owns Iris USB and recovery services.
+The viewer uses the existing espmirror encoder/decoder through IMAGE channel
+4 when board metadata advertises `iris_codec:1`. Firmware without that field
+uses the legacy raw SCREEN path. Other codec versions are rejected.
 
-Iris screen channel 3 supplies the full display as little-endian RGB565,
-with origin 0,0, stride `width * 2` and total size `stride * height`.
-The backend copies each requested chunk from the existing framebuffer while
-holding its lock. It does not allocate another framebuffer or freeze drawing
-for a whole frame: chunks of a moving frame can show different drawing
-updates. A busy framebuffer returns a timeout without blocking the Iris
-protocol task; Iris retries that chunk on a later poll. The Iris Gateway
-controls mirror start, stop and frame rate.
-`espmirror_connected()` includes an active Iris screen stream; a one-shot
-screenshot does not make it connected.
+#### Encoded IMAGE stream
+
+The viewer subscribes to `/v2/devices/{id}/streams/image` before starting
+`channel:image` through `/mirror/start`. The description is the board width
+and height, zero origin and stride, private format `0x4553`, quality/version 1.
+This is an espmirror application format, not a standard Iris pixel format.
+A reused IMAGE stream is refused because one viewer owns its ACKs and reference.
+The Gateway forwards each chunk unchanged as one binary WebSocket message:
+`metadata_size:u32`, UTF-8 JSON metadata, then chunk bytes. Integers are little
+endian. Gateway subscriber loss arrives separately as text JSON `history_gap`.
+
+Each chunk is `ESM1[4], epoch:u32, message:u32, offset:u32, total:u32, bytes[]`.
+It carries a fragment of an ordinary espmirror `F` payload, including its dirty
+rectangles and selected raw/RLE/delta/QOI coding. `total` is 8..65536 bytes;
+chunks are at most `iris_chunk` bytes including their 20-byte header. The
+firmware advertises `CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES` (256..3840), leaving
+up to 3820 bytes for encoded data. The Iris media DATA header adds 36 bytes
+outside this limit. Media `frame_id` equals the application message number.
+Inner DATA flags bit 0 marks offset zero and bit 1 marks the final chunk;
+all other bits are zero. These are application flags, separate from Iris
+wire-envelope STREAM_BEGIN/END flags.
+
+The viewer starts with a nonzero random epoch through the stream-control RPC.
+The mirror task releases held input, resets its encoder reference and dirties the full screen;
+messages start at 1 and advance without gaps. The viewer starts with a zero
+reference and waits for full screen coverage before showing it. That coverage
+can span several F messages. Only data matching the requested epoch and
+negotiated Iris stream ID may update this reference.
+
+Iris push has one latest-chunk slot and no public ready/completion API. The
+mirror task therefore submits one chunk, retains the encoded message in its
+existing buffer, and waits for an exact `(epoch, message, next_offset)` ACK.
+It neither builds another message nor submits another chunk before this ACK.
+The prefix of a later chunk occupies only previously acknowledged buffer bytes.
+A three-second ACK timeout, submit failure or cable/TCP takeover releases
+held input and clears this stream's encoder session. Only a new reset can resume it. RPC handlers enqueue
+commands and never wait for encoding or transmission.
+
+A changed device `dropped` counter, Gateway `history_gap`, missing/reordered
+chunks, invalid frame, or two seconds without data makes the viewer discard
+partial data and request a new epoch. Old queued epochs are ignored. Three
+unsuccessful recovery attempts are allowed before reconnecting. Application
+message numbers and offsets also detect losses not reflected in `dropped`.
+No reference from a failed generation is used for subsequent deltas.
+
+The firmware frame interval is `CONFIG_ESPMIRROR_FRAME_MS`; Iris push does not
+pace submissions using the negotiated FPS. ACK round trips also limit throughput.
+There is no claimed hardware FPS for this encoded path before device testing.
+The transport adds no full framebuffer; optional delta coding uses the core's
+existing reference allocation, two bytes per screen pixel.
+
+#### Screenshot and input
+
+The registered SCREEN backend remains available for Iris screenshots and raw
+mirror clients. It serves little-endian RGB565, origin 0,0, stride `width * 2`.
+`CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES` must hold a full screen row. Reads copy
+chunks from the existing framebuffer under its lock; a busy framebuffer returns
+a timeout without blocking the Iris protocol task. Iris retries later. The
+backend does not freeze drawing across chunks, so raw moving frames may tear.
 
 | Service | Method | Request | Successful response |
 | --- | --- | --- | --- |
 | `0x1001` (Iris pointer/v1) | 1 | `<BBhhHI>`, 12 bytes | Accepted sample, unchanged |
 | `0x4553` (espmirror keys) | 1 | `<BB>`, key code and down | Accepted pair, unchanged |
-| `0x4553` (espmirror board) | 2 | Empty | Board JSON from `B`, without the `B` byte |
+| `0x4553` (espmirror board) | 2 | Empty | Board JSON plus `iris_codec:1`, `iris_chunk` |
+| `0x4553` (stream control) | 3 | `<BIII>`, op, epoch, message, offset | Accepted command, unchanged |
 
-Pointer phases are 0 begin, 1 move, 2 end. Both reserved fields must be zero;
-coordinates must be within the full display. Sequence is echoed unchanged.
-Key codes are 1 through 10 and down is 0 or 1. Key taps use a down followed
-by an up request. Malformed requests are rejected before enqueueing.
-RPC success acknowledges acceptance into a bounded input queue, consumed
-by the mirror task through the same input path as serial/TCP. A full queue
-returns an error, so the host must not interpret it as an accepted release.
+Stream op 0 requests a new epoch; message and offset must be zero. Op 1 ACKs
+the next byte offset after a received chunk. Epoch must be nonzero. ACKs from
+old epochs, messages or offsets cannot advance the sender. RPC success means
+queue acceptance; data carrying the new epoch confirms a reset was applied.
 
-Input RPCs require an active screen stream and are rejected while a serial
-or TCP viewer owns input. A cable/TCP connection releases Iris input and
-invalidates queued Iris samples. Stream end releases held keys and pointer
-and invalidates samples queued for that stream. Iris screen capture can
-continue alongside the other transports. This mapping carries screen,
-pointer and keys only; the serial/TCP LED, audio and text messages are not
-encapsulated in Iris.
-The board metadata RPC is also available without an active stream. Its
-audio and keyboard fields describe the serial/TCP capabilities; an Iris
-viewer disables those controls because this mapping does not carry them.
+Pointer phases are 0 begin, 1 move, 2 end. Reserved fields must be zero;
+coordinates must be within the display. Sequence is echoed unchanged. Keys
+are 1..10 and down is 0 or 1. Malformed requests are rejected before enqueueing;
+a full queue returns an error. Input RPCs require SCREEN or IMAGE streaming
+and are rejected while a cable/TCP viewer owns input. Stream control requires
+IMAGE. Observed stream end or takeover releases held input and invalidates
+queued samples. `espmirror_connected()` includes either active mirror; a
+one-shot screenshot does not make it connected.
+
+This mapping carries screen, pointer and keys. LED, audio and text remain on
+serial/TCP; the Iris viewer disables those controls. Board metadata is available
+without an active stream. RPC_BODY_BYTES must accommodate its JSON and Iris
+capability fields; startup checks the configured response capacity.
 
 ### Serial and TCP
 

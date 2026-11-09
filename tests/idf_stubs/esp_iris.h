@@ -4,6 +4,7 @@
 #pragma once
 #include "common.h"
 #define ESP_IRIS_CHANNEL_SCREEN 3
+#define ESP_IRIS_CHANNEL_IMAGE 4
 #define ESP_IRIS_PIXEL_FORMAT_RGB565 1
 typedef struct {
     uint16_t service_id, method_id;
@@ -29,3 +30,5 @@ esp_err_t esp_iris_rpc_register(uint16_t, uint16_t, esp_iris_rpc_handler_t, void
 esp_err_t esp_iris_rpc_unregister(uint16_t, uint16_t);
 bool esp_iris_media_is_streaming(int);
 bool esp_iris_is_started(void);
+
+esp_err_t esp_iris_media_submit(int, const esp_iris_media_desc_t *, uint32_t, uint16_t, const void *, size_t);

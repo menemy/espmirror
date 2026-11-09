@@ -24,7 +24,8 @@ class ComponentTests(unittest.TestCase):
             command = shlex.split(os.environ.get('CC', 'cc')) + [
                 '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                 '-I' + str(ROOT / 'tests/idf_stubs'), '-I' + str(ROOT / 'include'),
-                '-I' + str(folder), str(ROOT / 'tests/espmirror_iris_harness.c'), '-o', str(exe)]
+                '-I' + str(folder), '-I' + str(ROOT / 'src'), str(ROOT / 'tests/espmirror_iris_harness.c'),
+                str(ROOT / 'src/espmirror_core.c'), '-o', str(exe)]
             result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, 'TMPDIR': tmp})
             self.assertEqual(result.returncode, 0, result.stderr)
             result = subprocess.run([exe], capture_output=True, text=True)

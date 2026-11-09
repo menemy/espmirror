@@ -109,9 +109,14 @@ python3 tools/espmirror.py "iris:$DEVICE_ID" --iris-gateway "$IRIS_GATEWAY" \
   --stats --seconds 10 --png /tmp/mosaico.png
 ```
 
-Statistics count complete frames received and RGB565 tile bytes, excluding
-HTTP, WebSocket and Iris framing. The full 480 x 480 frame is 460,800 bytes.
-The viewer requests 25 fps; actual throughput must be measured on hardware.
+The example enables delta and QOI coding. Delta uses a 460,800-byte reference
+in PSRAM, in addition to the existing screen copy. Encoded F messages travel
+through Iris IMAGE with one acknowledged chunk in flight. The viewer counts
+published F updates and encoded payload bytes, excluding HTTP, WebSocket,
+Iris and the application chunk header. A large update can span multiple F
+messages. These counts are not interchangeable with complete raw frame counts.
+Actual throughput must be measured on hardware; the encoded build has not
+been installed or measured yet.
 Use `mosaico.py ... iris memory --device-id "$DEVICE_ID"` before and during
 the stream to compare device allocations. Do not run streams while another
 board sharing the Gateway is under a power measurement.
@@ -119,9 +124,9 @@ board sharing the Gateway is under a power measurement.
 Host tests use a fake Gateway and sanitizer-enabled C stubs. They do not
 establish panel operation, USB throughput or device memory use.
 
-### Measured mirror-only behavior
+### Historical raw SCREEN measurements
 
-On an ESP-Mosaico V1.2, ESP-IDF `7b9cc1ac`, USB Highspeed and the default
+Before the encoded IMAGE transport, on an ESP-Mosaico V1.2, ESP-IDF `7b9cc1ac`, USB Highspeed and the default
 configuration, the viewer received 51 complete frames in 30 seconds
 (1.7 frames/s), 23,635,200 RGB565 bytes (787,829 bytes/s), on 2026-11-09 UTC.
 This is received throughput, not the requested 25 fps. The Mac was not

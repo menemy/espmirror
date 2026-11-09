@@ -1,12 +1,13 @@
 # Copyright (c) 2026 Maksim Nagaev
 # SPDX-License-Identifier: Apache-2.0
-"""ESP-Iris Gateway HTTP/RPC and RGB565 screen stream adapter."""
+"""ESP-Iris Gateway HTTP/RPC, encoded IMAGE stream and legacy RGB565 adapter."""
 import base64
 from contextlib import contextmanager
 import http.client
 import json
 import re
 import socket
+import secrets
 import struct
 import threading
 import time
@@ -78,6 +79,90 @@ def open_request(request, deadline, on_socket=None):
             timer.cancel()
         for release in releases:
             release()
+
+
+ENCODED_FORMAT = 0x4553
+CHUNK_HEADER = struct.Struct("<4sIIII")
+
+
+class StreamGap(ValueError):
+    """The delta reference must be replaced before any more pixels are applied."""
+
+
+class EncodedAssembler:
+    def __init__(self, width, height, stream_id, chunk_size, decode):
+        self.width, self.height = int(width), int(height)
+        if not (0 < self.width <= 4096 and 0 < self.height <= 4096
+                and self.width * self.height * 2 <= MAX_FRAME_BYTES and 256 <= chunk_size <= 3840):
+            raise ValueError("invalid Iris encoded stream dimensions or chunk limit")
+        self.stream_id, self.chunk_size, self.decode = int(stream_id), chunk_size, decode
+        self.pixels = np.zeros((self.height, self.width), dtype="<u2")
+        self.seen = np.zeros(self.pixels.shape, bool)
+        self.bytes_received = 0
+        self.reset(0)
+
+    def reset(self, epoch):
+        self.epoch, self.message, self.total = epoch, 1, None
+        self.buffer = bytearray()
+        self.dropped, self.ack, self.state = None, None, 0
+        self.pixels.fill(0)
+        self.seen.fill(False)
+
+    def feed(self, message):
+        self.ack = None
+        if isinstance(message, str):
+            if json.loads(message).get("kind") == "history_gap":
+                raise StreamGap("Gateway subscriber dropped chunks")
+            return None
+        if len(message) < 4 or len(message) > MAX_MESSAGE_BYTES:
+            raise StreamGap("invalid Iris chunk size")
+        length, = struct.unpack_from("<I", message)
+        if not 0 < length <= 65536 or 4 + length > len(message):
+            raise StreamGap("invalid Iris metadata size")
+        metadata = json.loads(message[4:4 + length])
+        if int(metadata.get("stream_id", -1)) != self.stream_id:
+            return None
+        data = message[4 + length:]
+        if not CHUNK_HEADER.size < len(data) <= self.chunk_size:
+            raise StreamGap("invalid encoded chunk length")
+        magic, epoch, number, offset, total = CHUNK_HEADER.unpack_from(data)
+        if magic != b"ESM1":
+            raise StreamGap("unknown encoded chunk version")
+        if epoch != self.epoch:
+            return None
+        desc = metadata.get("description", {})
+        if (int(metadata.get("channel", -1)) != 4 or desc.get("format") != ENCODED_FORMAT
+                or desc.get("quality") != 1 or desc.get("width") != self.width
+                or desc.get("height") != self.height or desc.get("x", 0) or desc.get("y", 0)
+                or desc.get("stride", 0)):
+            raise StreamGap("encoded stream description changed")
+        dropped = int(metadata.get("dropped", -1))
+        if not 0 <= dropped <= 0xffffffff or (self.dropped is not None and dropped != self.dropped):
+            raise StreamGap("device dropped chunks")
+        self.dropped = dropped
+        payload = data[CHUNK_HEADER.size:]
+        end = offset + len(payload)
+        flags = (1 if offset == 0 else 0) | (2 if end == total else 0)
+        if (not 8 <= total <= 65536 or number != self.message or metadata.get("frame_id") != number
+                or offset != len(self.buffer) or end > total or metadata.get("flags") != flags
+                or (self.total is not None and total != self.total)):
+            raise StreamGap("encoded message has missing or inconsistent chunks")
+        self.total = total
+        self.buffer.extend(payload)
+        self.bytes_received += len(payload)
+        frame = None
+        if end == total:
+            try:
+                self.state = self.decode(self.pixels, bytes(self.buffer), self.seen)
+            except (ValueError, IndexError, struct.error) as error:
+                raise StreamGap("invalid espmirror frame") from error
+            if self.seen.all():
+                frame = self.pixels.copy()
+            self.message += 1
+            self.total = None
+            self.buffer.clear()
+        self.ack = (epoch, number, end)
+        return frame
 
 
 def gateway_url(url):
@@ -189,7 +274,7 @@ class FrameAssembler:
 
 
 class IrisClient:
-    def __init__(self, url, device_id, fps=25):
+    def __init__(self, url, device_id, fps=25, decode=None):
         if not re.fullmatch(r"[0-9a-fA-F]{32}", device_id):
             raise ValueError("Iris target needs a 32-digit hexadecimal device ID")
         if not 1 <= fps <= 60:
@@ -211,6 +296,10 @@ class IrisClient:
         self.keys_down = set()
         self.sequence = 0
         self.assembler = None
+        self.decode = decode
+        self.channel = "screen"
+        self.encoded = False
+        self.resyncs = 0
 
     def rpc(self, service, method, payload, *, deadline=None):
         options = {"deadline": time.monotonic() + 3 if deadline is None else deadline}
@@ -235,16 +324,23 @@ class IrisClient:
         if not isinstance(board, dict):
             raise ValueError("invalid Iris board metadata")
         self.board = {**board, "audio": False, "keyboard": False}
-        ws_url = ("wss" if self.url.startswith("https:") else "ws") + self.url[self.url.index(":"):] + self.path + "/streams/screen"
+        if board.get("iris_codec", 0) not in (0, 1):
+            raise ValueError("unsupported espmirror Iris codec version")
+        self.encoded = board.get("iris_codec") == 1
+        self.channel = "image" if self.encoded else "screen"
+        ws_url = ("wss" if self.url.startswith("https:") else "ws") + self.url[self.url.index(":"):] + self.path + "/streams/" + self.channel
         self.connection_context = connect(ws_url, open_timeout=3, close_timeout=1, compression=None,
                                           max_size=MAX_MESSAGE_BYTES, max_queue=8, proxy=None)
         self.socket = self.connection_context.__enter__()
         try:
             if self.cancelled.is_set():
                 raise ConnectionError("Iris connection closed")
+            body = {"channel": self.channel, "fps": self.fps}
+            if self.encoded:
+                body["description"] = dict(width=board["w"], height=board["h"], format=ENCODED_FORMAT, quality=1)
             self.start_operation = str(uuid.uuid4())
             try:
-                result = request_json(self.url, self.path + "/mirror/start", {"channel": "screen", "fps": self.fps},
+                result = request_json(self.url, self.path + "/mirror/start", body,
                                       operation_id=self.start_operation, deadline=time.monotonic() + 3,
                                       on_socket=self.track_socket)["mirror"]
             except GatewayHTTPError as error:
@@ -255,7 +351,17 @@ class IrisClient:
             self.start_operation = None
             if self.cancelled.is_set():
                 raise ConnectionError("Iris connection closed")
-            self.assembler = FrameAssembler(result["description"], result["stream_id"])
+            if self.encoded:
+                if not self.owns_stream:
+                    raise ConnectionError("encoded Iris stream already has a viewer")
+                if self.decode is None:
+                    from espmirror import apply_frame
+                    self.decode = apply_frame
+                self.assembler = EncodedAssembler(board["w"], board["h"], result["stream_id"],
+                                                   int(board["iris_chunk"]), self.decode)
+                self.resync()
+            else:
+                self.assembler = FrameAssembler(result["description"], result["stream_id"])
             if (board.get("w"), board.get("h")) != (self.assembler.width, self.assembler.height):
                 raise ValueError("Iris screen geometry differs from board metadata")
         except Exception:
@@ -264,7 +370,36 @@ class IrisClient:
         return self.assembler
 
     def receive(self):
-        return self.assembler.feed(self.socket.recv(timeout=6))
+        if not self.encoded:
+            return self.assembler.feed(self.socket.recv(timeout=6))
+        try:
+            frame = self.assembler.feed(self.socket.recv(timeout=2))
+        except (TimeoutError, ValueError, KeyError, TypeError, struct.error):
+            self.resyncs += 1
+            if self.resyncs > 3:
+                raise ConnectionError("Iris stream could not establish a reference")
+            self.resync()
+            return None
+        if self.assembler.ack is not None:
+            self.stream_command(1, *self.assembler.ack)
+        if frame is not None:
+            self.resyncs = 0
+        return frame
+
+    def stream_command(self, op, epoch, message=0, offset=0):
+        with self.close_lock:
+            if self.cancelled.is_set() or self.closed:
+                raise ConnectionError("Iris connection closed")
+            wire = struct.pack("<BIII", op, epoch, message, offset)
+            if self.rpc(0x4553, 3, wire) != wire:
+                raise ConnectionError("Iris stream control response differs from request")
+
+    def resync(self):
+        epoch = secrets.randbits(32) or 1
+        if epoch == self.assembler.epoch:
+            epoch = epoch % 0xffffffff + 1
+        self.assembler.reset(epoch)
+        self.stream_command(0, epoch)
 
     def cancel(self):
         self.cancelled.set()
@@ -366,7 +501,7 @@ class IrisClient:
                         error = failure
             if self.owns_stream:
                 try:
-                    request_json(self.url, self.path + "/mirror/stop", {"channel": "screen"}, deadline=deadline)
+                    request_json(self.url, self.path + "/mirror/stop", {"channel": self.channel}, deadline=deadline)
                 except GatewayHTTPError as failure:
                     if failure.status != 404:
                         raise

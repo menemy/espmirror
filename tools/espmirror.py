@@ -1053,7 +1053,7 @@ class IrisLink(Link):
                     self.status("Iris cleanup: %s, retrying" % error)
                     self.stopped.wait(2)
                     continue
-            client = IrisClient(self.gateway, self.host.removeprefix("iris:"))
+            client = IrisClient(self.gateway, self.host.removeprefix("iris:"), decode=apply_frame)
             writer = None
             try:
                 self.client = client
@@ -1080,6 +1080,7 @@ class IrisLink(Link):
                         continue
                     with self.lock:
                         self.fb = frame
+                        self.state = assembler.state if client.encoded else 0
                         self.seen.fill(True)
                         self.changes += 1
                     self.on_frame()

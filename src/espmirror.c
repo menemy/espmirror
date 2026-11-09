@@ -293,7 +293,8 @@ void espmirror_set_led(uint8_t mode) {
 bool espmirror_connected(void) {
     return s_serial || __atomic_load_n(&s_cfd, __ATOMIC_RELAXED) >= 0
 #if CONFIG_ESPMIRROR_IRIS
-        || (s_ready && esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN))
+        || (s_ready && (esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN)
+                       || esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE)))
 #endif
         ;
 }
@@ -960,15 +961,41 @@ static void console_task(void *arg) {
 #define IRIS_KEY_SERVICE 0x4553
 #define IRIS_KEY_METHOD 1
 #define IRIS_BOARD_METHOD 2
+#define IRIS_STREAM_METHOD 3
+#define IRIS_FORMAT 0x4553
+#define IRIS_CHUNK_HEADER 20
 typedef struct {
     unsigned generation;
-    uint8_t len, data[5];
+    uint8_t len, data[13];
 } iris_input_t;
 static QueueHandle_t s_iris_in;
 static atomic_uint s_iris_generation;
 static unsigned s_iris_seen;
 static bool s_iris_input_owned;
 static bool s_iris_screen_registered, s_iris_pointer_registered, s_iris_key_registered, s_iris_board_registered;
+static bool s_iris_stream_registered, s_iris_image_seen;
+/* The mirror task owns the encoded buffer until the exact chunk ACK arrives. */
+static uint32_t s_iris_epoch, s_iris_message;
+static size_t s_iris_length, s_iris_offset, s_iris_ack;
+static int64_t s_iris_sent_us, s_iris_frame_us;
+
+static uint32_t iris_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void iris_put32(uint8_t *p, uint32_t n) {
+    for (int i = 0; i < 4; i++) p[i] = n >> (8 * i);
+}
+
+static void iris_stream_clear(void) {
+    s_iris_epoch = 0;
+    s_iris_length = s_iris_offset = s_iris_ack = 0;
+}
+
+static bool iris_active(void) {
+    return esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN)
+        || esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE);
+}
 
 static esp_err_t iris_screen_begin(const esp_iris_media_desc_t *requested,
                                    esp_iris_media_desc_t *actual, uint32_t *total,
@@ -1001,12 +1028,12 @@ static esp_err_t iris_screen_read(uint32_t offset, uint8_t *out, size_t capacity
 
 static void iris_screen_end(void *ctx) {
     (void)ctx;
-    atomic_fetch_add(&s_iris_generation, 1);
+    if (!esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE)) atomic_fetch_add(&s_iris_generation, 1);
 }
 
 static esp_err_t iris_enqueue(iris_input_t *event) {
     event->generation = atomic_load(&s_iris_generation);
-    if (!s_ready || viewer_on() || !esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN)) return ESP_ERR_INVALID_STATE;
+    if (!s_ready || viewer_on() || !iris_active()) return ESP_ERR_INVALID_STATE;
     if (event->generation != atomic_load(&s_iris_generation)) return ESP_ERR_INVALID_STATE;
     return xQueueSend(s_iris_in, event, 0) == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
 }
@@ -1058,37 +1085,131 @@ static esp_err_t iris_board_rpc(const esp_iris_rpc_request_t *request, uint8_t *
     (void)ctx;
     *size = 0;
     if (!s_ready) return ESP_ERR_INVALID_STATE;
-    if (!request || request->payload_size || !response || capacity < s_board_len - 1) return ESP_ERR_INVALID_ARG;
-    memcpy(response, s_board + 1, s_board_len - 1);
-    *size = s_board_len - 1;
+    if (!request || request->payload_size || !response) return ESP_ERR_INVALID_ARG;
+    int n = snprintf((char *)response, capacity, "%.*s,\"iris_codec\":1,\"iris_chunk\":%d}",
+                     (int)s_board_len - 2, s_board + 1, CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES);
+    if (n < 0 || (size_t)n >= capacity) return ESP_ERR_INVALID_ARG;
+    *size = (size_t)n;
     return ESP_OK;
+}
+
+static esp_err_t iris_stream_rpc(const esp_iris_rpc_request_t *request, uint8_t *response,
+                                 size_t capacity, size_t *size, void *ctx) {
+    (void)ctx;
+    *size = 0;
+    if (!request || !request->payload || request->payload_size != 13 || !response || capacity < 13)
+        return ESP_ERR_INVALID_ARG;
+    const uint8_t *p = request->payload;
+    if (p[0] > 1 || !iris_u32(p + 1) || (!p[0] && (iris_u32(p + 5) || iris_u32(p + 9))))
+        return ESP_ERR_INVALID_ARG;
+    if (!esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE)) return ESP_ERR_INVALID_STATE;
+    iris_input_t event = { .len = 13 };
+    memcpy(event.data, p, 13);
+    esp_err_t err = iris_enqueue(&event);
+    if (err == ESP_OK) { memcpy(response, p, 13); *size = 13; }
+    return err;
+}
+
+static void iris_stream_command(const uint8_t *p) {
+    if (!esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE)) return;
+    uint32_t epoch = iris_u32(p + 1), message = iris_u32(p + 5), offset = iris_u32(p + 9);
+    if (!p[0]) {
+        iris_release();
+        iris_stream_clear();
+        s_iris_epoch = epoch;
+        s_iris_message = 1;
+        s_iris_frame_us = 0;
+        refresh();
+    } else if (epoch == s_iris_epoch && message == s_iris_message && s_iris_ack && offset == s_iris_ack) {
+        s_iris_offset = s_iris_ack;
+        s_iris_ack = 0;
+        if (s_iris_offset == s_iris_length) {
+            s_iris_length = s_iris_offset = 0;
+            if (++s_iris_message == 0) iris_stream_clear();
+        }
+    }
+}
+
+static void iris_stream_pump(void) {
+    if (viewer_on() || !esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE)) {
+        iris_stream_clear();
+        return;
+    }
+    if (!s_iris_epoch) return;
+    int64_t now = esp_timer_get_time();
+    if (s_iris_ack) {
+        if (now - s_iris_sent_us > SEND_MS * 1000LL) {
+            iris_release();
+            iris_stream_clear();
+        }
+        return;
+    }
+    if (!s_iris_length) {
+        if (now - s_iris_frame_us < FRAME_MS * 1000LL) return;
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (espmirror_core_pending(&s_core) || now - s_iris_frame_us >= BEAT_MS * 1000LL) {
+            s_iris_length = espmirror_core_build(&s_core, s_fb, s_msg + IRIS_CHUNK_HEADER,
+                                               MSG_MAX - IRIS_CHUNK_HEADER, s_state);
+        }
+        xSemaphoreGive(s_lock);
+        if (!s_iris_length) return;
+        s_iris_frame_us = now;
+    }
+    size_t n = s_iris_length - s_iris_offset;
+    if (n > CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES - IRIS_CHUNK_HEADER)
+        n = CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES - IRIS_CHUNK_HEADER;
+    /* Prefix space for later chunks overlaps only bytes already acknowledged. */
+    uint8_t *p = s_msg + s_iris_offset;
+    memcpy(p, "ESM1", 4);
+    iris_put32(p + 4, s_iris_epoch);
+    iris_put32(p + 8, s_iris_message);
+    iris_put32(p + 12, s_iris_offset);
+    iris_put32(p + 16, s_iris_length);
+    uint16_t flags = (!s_iris_offset ? 1 : 0) | (s_iris_offset + n == s_iris_length ? 2 : 0);
+    esp_iris_media_desc_t desc = { .width = s_w, .height = s_h, .format = IRIS_FORMAT, .quality = 1 };
+    if (esp_iris_media_submit(ESP_IRIS_CHANNEL_IMAGE, &desc, s_iris_message, flags,
+                              p, n + IRIS_CHUNK_HEADER) != ESP_OK) {
+        iris_release();
+        iris_stream_clear();
+        return;
+    }
+    s_iris_ack = s_iris_offset + n;
+    s_iris_sent_us = now;
 }
 
 static void iris_takeover(void) {
     atomic_fetch_add(&s_iris_generation, 1);
     iris_release();
+    iris_stream_clear();
 }
 
 static void iris_pump(void) {
+    bool image_active = esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_IMAGE);
+    if (s_iris_image_seen && !image_active) atomic_fetch_add(&s_iris_generation, 1);
+    s_iris_image_seen = image_active;
+    if (!image_active) iris_stream_clear();
     unsigned generation = atomic_load(&s_iris_generation);
-    bool active = esp_iris_media_is_streaming(ESP_IRIS_CHANNEL_SCREEN) && !viewer_on();
+    bool active = iris_active() && !viewer_on();
     if (!active || generation != s_iris_seen) iris_release();
     s_iris_seen = generation;
     iris_input_t event;
     for (int i = 0; i < 8 && xQueueReceive(s_iris_in, &event, 0) == pdTRUE; i++) {
         if (!active || event.generation != generation) continue;
+        if (event.len == 13) { iris_stream_command(event.data); continue; }
         s_iris_input_owned = true;
         input(event.data, event.len);
     }
 }
 
 static void iris_unregister(void) {
+    if (s_iris_stream_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_STREAM_METHOD);
     if (s_iris_board_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_BOARD_METHOD);
     if (s_iris_key_registered) esp_iris_rpc_unregister(IRIS_KEY_SERVICE, IRIS_KEY_METHOD);
     if (s_iris_pointer_registered) esp_iris_rpc_unregister(ESP_IRIS_POINTER_SERVICE_ID, ESP_IRIS_POINTER_METHOD_ID);
     if (s_iris_screen_registered) esp_iris_screen_unregister(&s_cfg);
     s_iris_key_registered = s_iris_pointer_registered = s_iris_screen_registered = false;
     s_iris_board_registered = false;
+    s_iris_stream_registered = false;
 }
 
 static esp_err_t iris_register(void) {
@@ -1104,7 +1225,10 @@ static esp_err_t iris_register(void) {
     if (err != ESP_OK) return err;
     s_iris_key_registered = true;
     err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_BOARD_METHOD, iris_board_rpc, &s_cfg);
-    if (err == ESP_OK) s_iris_board_registered = true;
+    if (err != ESP_OK) return err;
+    s_iris_board_registered = true;
+    err = esp_iris_rpc_register(IRIS_KEY_SERVICE, IRIS_STREAM_METHOD, iris_stream_rpc, &s_cfg);
+    if (err == ESP_OK) s_iris_stream_registered = true;
     return err;
 }
 #endif
@@ -1126,7 +1250,12 @@ static void mirror_task(void *arg) {
 #if CONFIG_ESPMIRROR_AUDIO
         audio_pump();
 #endif
-        if (!viewer_on()) continue;
+        if (!viewer_on()) {
+#if CONFIG_ESPMIRROR_IRIS
+            iris_stream_pump();
+#endif
+            continue;
+        }
         int64_t now = esp_timer_get_time() / 1000;
         xSemaphoreTake(s_lock, portMAX_DELAY);
         bool dirty = espmirror_core_pending(&s_core);
@@ -1163,6 +1292,7 @@ static esp_err_t start(const espmirror_config_t *config) {
 #if CONFIG_ESPMIRROR_IRIS
     if (esp_iris_is_started()) return ESP_ERR_INVALID_STATE;
     if ((size_t)config->width * 2 > CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES) return ESP_ERR_INVALID_ARG;
+    if ((size_t)config->width * 2 + RECT_HDR + 8 + IRIS_CHUNK_HEADER > MSG_MAX) return ESP_ERR_INVALID_ARG;
 #endif
     if (CONFIG_ESPMIRROR_USB_NETWORK && config->external_console) return ESP_ERR_INVALID_ARG;   /* the component owns TinyUSB */
     uint8_t mac[6];
@@ -1224,7 +1354,8 @@ static esp_err_t start(const espmirror_config_t *config) {
     if (s_board_len + 3 > sizeof(s_board)) return ESP_ERR_INVALID_ARG;
     memcpy(s_board + s_board_len, "]}", 3); s_board_len += 2;
 #if CONFIG_ESPMIRROR_IRIS
-    if (s_board_len - 1 > CONFIG_ESP_IRIS_RPC_BODY_BYTES) return ESP_ERR_INVALID_ARG;
+    if (s_board_len - 2 + sizeof(",\"iris_codec\":1,\"iris_chunk\":3840}") > CONFIG_ESP_IRIS_RPC_BODY_BYTES)
+        return ESP_ERR_INVALID_ARG;
 #endif
     unsigned flags = 0;
 #if CONFIG_ESPMIRROR_DELTA

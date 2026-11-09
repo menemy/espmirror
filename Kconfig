@@ -4,7 +4,8 @@ menu "espmirror"
         bool "Screen and input through ESP-Iris"
         default n
         help
-            Register the existing RGB565 screen copy and pointer/key RPCs
+            Carry encoded dirty rectangles over IMAGE with chunk ACKs;
+            register the RGB565 screenshot copy and pointer/key RPCs
             with esp_iris. Add esp_iris to the application's component
             directories and enable its screen media and RPC support.
             Start espmirror before esp_iris_start(); the application owns
@@ -12,8 +13,8 @@ menu "espmirror"
             when Iris owns that port. MEDIA_LATEST_BYTES must fit one
             screen row (width * 2). Iris carries screen, pointer and keys;
             audio, LED and text input use the serial or TCP transport.
-            RPC_BODY_BYTES must fit the board metadata JSON; 2048 fits
-            the component's maximum board description.
+            RPC_BODY_BYTES must fit the board metadata JSON and Iris
+            capability fields. Startup rejects a description that cannot fit.
 
     config ESPMIRROR_USB_NETWORK
         bool "USB network and serial port over TinyUSB"

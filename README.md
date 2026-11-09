@@ -178,7 +178,9 @@ unless the network and these capabilities are intentionally trusted.
 
 **ESP-Iris** (`CONFIG_ESPMIRROR_IRIS=y`). The application supplies and starts
 `esp_iris`, which owns its USB transport. Start espmirror before Iris; it
-registers the existing framebuffer, pointer input, keys and board metadata.
+registers the screenshot framebuffer, pointer input, keys and board metadata.
+The viewer carries espmirror's encoded dirty rectangles over Iris IMAGE, with
+chunk ACKs and reference recovery after loss. Older firmware uses raw SCREEN.
 The viewer uses a running ESP-Iris Gateway:
 
 ```sh
