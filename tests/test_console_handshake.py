@@ -48,7 +48,7 @@ class ConsoleHandshakeTests(unittest.TestCase):
                     patch.object(mirror.time, 'sleep'), contextlib.redirect_stdout(output):
                 self.assertIs(mirror.open_serial('test', on_text=log.feed), serial)
                 log.flush()
-            self.assertEqual(output.getvalue(), path.read_text() if path.exists() else '')
+            self.assertEqual(output.getvalue(), path.read_text(encoding='utf-8') if path.exists() else '')
         self.assertFalse(serial.closed)
         return serial, output.getvalue()
 
@@ -111,7 +111,7 @@ class ConsoleHandshakeTests(unittest.TestCase):
                     log.feed(bytes([byte]))
                 log.feed(b'partial\x01')
                 log.flush()
-            self.assertEqual(output.getvalue(), path.read_text())
+            self.assertEqual(output.getvalue(), path.read_text(encoding='utf-8'))
         self.assertEqual(len(output.getvalue().splitlines()), 1)
         self.assertIn('\x1b[32mготово\x1b[0m\tOK', output.getvalue())
 

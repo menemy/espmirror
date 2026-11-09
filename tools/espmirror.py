@@ -713,6 +713,8 @@ class Link:
                 sock = self.sock
                 if sock is not None:
                     sock.shutdown(socket.SHUT_RDWR)
+                    if os.name == 'nt':
+                        sock.close()        # Winsock shutdown does not wake a blocked recv; closesocket does
         except OSError:
             pass
 
@@ -2564,9 +2566,9 @@ def main():
         link = make_link(*targets[0], log_file=args.log, gateway=args.iris_gateway)
         try:
             link.start()
-            start = time.monotonic()
+            start = time.perf_counter()
             time.sleep(args.seconds)
-            elapsed = time.monotonic() - start
+            elapsed = max(time.perf_counter() - start, 1e-6)    # Windows sleep can return before the clock moves
             print("%d updates in %.2f s, %.1f updates/s" % (link.changes, elapsed, link.changes / elapsed))
             if isinstance(link, IrisLink):
                 print("%d RGB565 bytes, %.0f bytes/s" % (link.bytes_received, link.bytes_received / elapsed))

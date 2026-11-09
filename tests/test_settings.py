@@ -37,7 +37,7 @@ class StartupSettingsTests(unittest.TestCase):
             self.assertEqual(mirror.capture_path('png', '-window', 'stamp'), '/tmp/default.png')
             desktop.assert_called_once_with('png', '-window', 'stamp')
             self.assertEqual(mirror.capture_path('mp4', stamp='stamp', folder='/tmp/custom'),
-                             '/tmp/custom/mirror-stamp.mp4')
+                             os.path.join('/tmp/custom', 'mirror-stamp.mp4'))
 
     def test_saved_targets_and_explicit_cli_overrides(self):
         preferences = dict(DEFAULTS, usb=False, wifi=True, hosts='192.0.2.8:7444\n192.0.2.8:7444',
