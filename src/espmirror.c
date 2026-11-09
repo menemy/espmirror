@@ -96,13 +96,13 @@ _Static_assert(MSG_MAX >= 8 * 1024, "CONFIG_ESPMIRROR_MSG_KB: 8 or more");
 static espmirror_config_t s_cfg;
 static char s_name[48];        /* the board's name, JSON-safe */
 static int s_w, s_h;
-static volatile bool s_ready;  /* the task runs once everything is published */
+static atomic_bool s_ready;     /* the task runs once everything is published */
 
 static uint16_t *s_fb;         /* the screen copy, under s_lock */
 static uint8_t *s_msg;
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_task;
-static volatile uint8_t s_state;
+static atomic_uchar s_state;
 
 static espmirror_core_t s_core;
 static uint16_t *s_previous;
@@ -282,7 +282,7 @@ void espmirror_size(int *width, int *height) {
 }
 
 void espmirror_set_screen_state(uint8_t state) {
-    __atomic_store_n(&s_state, state > 2 ? 2 : state, __ATOMIC_RELAXED);
+    atomic_store_explicit(&s_state, state > 2 ? 2 : state, memory_order_relaxed);
     if (s_w) dirty_add(0, 0, 0, 0);       /* a frame goes out with it; one pixel's worth of rectangle */
 }
 
@@ -467,7 +467,7 @@ static inline void put32(uint8_t *p, uint32_t v) {
 
 static size_t build_msg(void) {
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    size_t n = espmirror_core_build(&s_core, s_fb, s_msg, MSG_MAX, s_state);
+    size_t n = espmirror_core_build(&s_core, s_fb, s_msg, MSG_MAX, atomic_load_explicit(&s_state, memory_order_relaxed));
     xSemaphoreGive(s_lock);
     return n;
 }
@@ -1351,7 +1351,7 @@ static esp_err_t start(const espmirror_config_t *config) {
         return err;
     }
     __atomic_store_n(&s_fb, fb, __ATOMIC_RELEASE);   /* the drawing side may call in from now on */
-    __atomic_store_n(&s_ready, true, __ATOMIC_RELEASE);   /* and the task may serve */
+    atomic_store_explicit(&s_ready, true, memory_order_release);   /* and the task may serve */
 #if CONFIG_ESPMIRROR_TCP
     esp_err_t mdns = mdns_init();
     if (mdns == ESP_OK) mdns_hostname_set("espmirror");
