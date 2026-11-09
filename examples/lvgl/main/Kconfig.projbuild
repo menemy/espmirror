@@ -73,7 +73,7 @@ menu "espmirror example"
         int "Pixels per inch (for the viewer's real-size mode)"
         default 184 if EXAMPLE_BOARD_WAVESHARE_154G
         default 190 if EXAMPLE_BOARD_WAVESHARE_349
-        default 377 if EXAMPLE_BOARD_WAVESHARE_175C
+        default 270 if EXAMPLE_BOARD_WAVESHARE_175C
         default 126 if EXAMPLE_BOARD_AIPI_LITE
         default 314 if EXAMPLE_BOARD_WAVESHARE_216
         default 200
