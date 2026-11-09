@@ -1138,7 +1138,18 @@ static void mirror_task(void *arg) {
     }
 }
 
+static esp_err_t start(const espmirror_config_t *config);
+
 esp_err_t espmirror_start(const espmirror_config_t *config) {
+    esp_err_t err = start(config);
+    if (err != ESP_OK && !s_task) {
+        s_w = s_h = 0;                    /* the screen calls check s_w; without a task there is no lock either */
+        heap_caps_free(s_previous); s_previous = NULL;
+    }
+    return err;
+}
+
+static esp_err_t start(const espmirror_config_t *config) {
     if (!config || config->width <= 0 || config->height <= 0 || config->width > 4096 || config->height > 4096) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -1166,12 +1177,17 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     size_t at = 0;
     for (const char *p = config->name ? config->name : ""; *p; p++) {
         unsigned char c = (unsigned char)*p;
-        if (c < 0x20) continue;
+        if (c < 0x20 || (c >= 0x80 && c < 0xC2) || c > 0xF4) continue;
         size_t need = c == '"' || c == '\\' ? 2 : c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : 2;   /* whole characters */
+        if (c >= 0x80) {
+            size_t k = 1;
+            while (k < need && ((unsigned char)p[k] & 0xC0) == 0x80) k++;
+            if (k < need) continue;       /* a broken sequence: its lead byte goes, the rest is read afresh */
+        }
         if (at + need >= sizeof(s_name)) break;
         if (need == 2 && c < 0x80) s_name[at++] = '\\';
         s_name[at++] = (char)c;
-        for (size_t k = 1; k < need && c >= 0x80 && p[1]; k++) s_name[at++] = *++p;
+        for (size_t k = 1; k < need && c >= 0x80; k++) s_name[at++] = *++p;
     }
     s_name[at] = 0;
     s_w = config->width;
