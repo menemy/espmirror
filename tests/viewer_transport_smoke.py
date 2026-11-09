@@ -7,11 +7,12 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from unittest.mock import patch
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
@@ -117,6 +118,8 @@ def main():
     timer.start()
     with ExitStack() as stack:
         try:
+            preferences = stack.enter_context(tempfile.TemporaryDirectory())
+            settings = QSettings(str(Path(preferences) / 'viewer.ini'), QSettings.Format.IniFormat)
             stack.enter_context(patch.object(mirror, 'desktop_path', output_path))
             if serial:
                 import serial as pyserial
@@ -124,7 +127,7 @@ def main():
                 stack.enter_context(patch.object(pyserial.Serial, '_update_dtr_state', lambda self: None))
                 stack.enter_context(patch.object(pyserial.Serial, '_update_rts_state', lambda self: None))
             mirror.run_window([target], 1, False, False, str(ROOT / 'tools/devices'),
-                              log_file=str(args.output / 'console.log'))
+                              log_file=str(args.output / 'console.log'), settings=settings)
         finally:
             timer.stop()
             for win in app.topLevelWidgets():

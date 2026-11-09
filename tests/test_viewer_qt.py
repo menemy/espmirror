@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 import numpy as np
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication
 import espmirror as mirror
 import fake_board
@@ -75,8 +75,10 @@ def check():
 QTimer.singleShot(100, check)
 QTimer.singleShot(10000, app.quit)
 with patch.object(mirror.Link, 'start', lambda self: self):
-    mirror.run_window([('test%d' % i, 7331) for i in range(6)], 1, False, True,
-                      str(Path(mirror.__file__).parent / 'devices'))
+    with tempfile.TemporaryDirectory() as preferences:
+        settings = QSettings(str(Path(preferences) / 'viewer.ini'), QSettings.Format.IniFormat)
+        mirror.run_window([('test%d' % i, 7331) for i in range(6)], 1, False, True,
+                          str(Path(mirror.__file__).parent / 'devices'), settings=settings)
 if errors:
     raise errors[0]
 assert completed, "viewer callback did not run"

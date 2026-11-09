@@ -711,6 +711,13 @@ class CableLinkTests(unittest.TestCase):
 
 
 class MirrorDefaultsTests(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import patch
+        from espmirror_settings import DEFAULTS
+        prefs = patch('espmirror_settings.read_preferences', return_value=DEFAULTS.copy())
+        prefs.start()
+        self.addCleanup(prefs.stop)
+
     def test_viewer_default_wifi_opt_in_and_explicit_address(self):
         from unittest.mock import patch
         usb = [('/dev/test-muse', 'aa')]

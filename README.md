@@ -241,7 +241,7 @@ passive. `--wifi` adds mDNS; an explicit address always selects TCP.
 default); with it, `--png out.png` saves the screen once it is still.
 `--scale K` starts the window at K times the real size.
 
-Captures use the operating system's Desktop folder, including redirected
+By default, captures use the operating system's Desktop folder, including redirected
 Windows desktops and Linux XDG directories, or the home directory if that
 folder is absent. `ffmpeg -version` checks that the command-line encoder is
 available; its build must include `libx264`. Qt's multimedia libraries alone
@@ -272,6 +272,43 @@ On 2026-11-09, all 65 host tests passed in a Debian 13 aarch64 container with
 Python 3.12.16, PySide6 6.12.0, pyserial 3.5 and ffmpeg 7.1.5. That run included
 the offscreen TCP and serial PTY fake-board tests, PNG capture and MP4 encoding.
 No USB devices or physical audio devices were passed into the container.
+
+### Settings
+
+Open **Settings…** from the right-click menu, or press Cmd+, (Ctrl+,
+on Windows/Linux). On macOS, Qt places Settings in the application menu.
+`python tools/espmirror.py --settings` opens the same dialog
+without connecting to a board.
+
+- **Window:** default size (25 to 800 percent), Float on Top, Show touches,
+  remember window position, and listen to the first board's speaker at startup.
+  Changing the default size applies it to the current window too. Resizing by
+  a corner or Bigger/Smaller changes only the current window's size.
+- **Files:** separate folders for screenshots and recordings, and an optional
+  console log file. Empty capture folders use Desktop, or the home folder if
+  Desktop is unavailable. Choose existing folders. The log is appended starting
+  at the next launch; an empty log field disables it. If writing fails, a terminal
+  warning reports that file logging is disabled for this run; the connection and
+  console output continue.
+- **Connections:** discover USB boards (on by default), discover mDNS network
+  boards (off by default), and explicit addresses or serial ports, one per line.
+  These choices apply at the next launch. An identical target is opened once;
+  discovery prefers USB when a board advertises the same MAC over mDNS.
+
+Save persists preferences using Qt's QSettings (`espmirror` / `mirror`). Cancel
+leaves them unchanged. Window appearance and capture folders apply immediately;
+startup sound, connections and logging apply at the next launch. Float on Top
+and Show touches in View are also remembered. A remembered position on a
+disconnected display is moved back onto the primary display.
+
+Explicit command-line options override saved startup preferences for that run.
+Settings shows saved defaults; saving unrelated fields preserves CLI overrides
+in the current window. Changing default size or Float on Top explicitly also
+updates the current window.
+`--no-sound`, `--no-on-top`, `--no-wifi` and `--no-usb` disable their saved
+counterparts; `--log ''` disables the saved log. Positional targets replace
+both discovery and the saved target list. Headless `--list`, `--stats` and
+`--png` use command-line options and built-in defaults, ignoring GUI preferences.
 
 ## Examples
 

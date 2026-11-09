@@ -28,15 +28,17 @@ the window; any corner resizes it.
 Above the device: talk and listen (QtMultimedia), record, screenshot and
 close. Screenshots (each screen at its own pixels, and the devices as drawn,
 without the window's buttons and handles) and recordings (the devices, mp4
-through ffmpeg) go to the Desktop as mirror-<time>.*.
+through ffmpeg) go to the Desktop as mirror-<time>.*, unless changed in Settings.
 
   Ctrl+S (Cmd on a Mac)  screenshot
   Ctrl+R                 record, again to stop
   Ctrl+0 / + / -         actual size / bigger / smaller
   Ctrl+T                 float on top
+  Ctrl+,                 settings (saved between launches)
   right click            the same, as a menu (on a Mac also the View menu)
 
   --list         print USB boards and exit; add --wifi for network boards
+  --settings     edit preferences without connecting to boards
   --wifi         include mDNS discovery (network firmware opt-in required)
   --log FILE     append timestamped cable console logs to FILE
   --png FILE     save the first board's screen once all of it has arrived, and exit
@@ -233,8 +235,12 @@ class ConsoleLog:
             with _LOG_LOCK:
                 print(line, flush=True)
                 if self.file:
-                    with open(self.file, 'a', encoding='utf-8') as out:
-                        out.write(line + '\n')
+                    try:
+                        with open(self.file, 'a', encoding='utf-8') as out:
+                            out.write(line + '\n')
+                    except OSError as error:
+                        print('console log disabled (%s): %s' % (self.file, error), file=sys.stderr, flush=True)
+                        self.file = None
 
     def flush(self):
         if self.pending:
@@ -876,6 +882,13 @@ def desktop_path(ext, tag="", stamp=None):
     return os.path.join(folder if os.path.isdir(folder) else home, "mirror-%s%s.%s" % (stamp, tag, ext))
 
 
+def capture_path(ext, tag="", stamp=None, folder=None):
+    if not folder:
+        return desktop_path(ext, tag, stamp)
+    stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    return os.path.join(folder, "mirror-%s%s.%s" % (stamp, tag, ext))
+
+
 def save_png(link, path, timeout=15):
     """The screen as a PNG once every pixel of it has arrived."""
     end = time.monotonic() + timeout
@@ -894,12 +907,13 @@ def save_png(link, path, timeout=15):
 # ---------------------------------------------------------------------------------------------------------------
 # The window. Everything below needs PySide6; the protocol above does not.
 
-def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=False):
-    from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSettings, Qt, QTimer, Signal
+def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=False, settings=None):
+    from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
     from PySide6.QtGui import (QAction, QBrush, QColor, QCursor, QFont, QFontMetricsF, QGuiApplication, QIcon,
                                QImage, QKeySequence, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
                                QPolygonF, QRadialGradient, QTransform)
     from espmirror_audio import AudioSession
+    from espmirror_settings import edit_preferences, read_preferences, settings_store
     from PySide6.QtWidgets import QApplication, QMenu, QMenuBar, QToolTip, QWidget
 
     BUTTON = 34                      # talk, listen, record, screenshot, close
@@ -1357,7 +1371,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             self.zoom, self.ss, self.lay = scale, None, None
             self.zooming, self.zoomed_at = False, 0.0
             self.flash_until, self.toast = 0.0, None
-            self.settings = QSettings("espmirror", "mirror")
+            self.settings = settings if settings is not None else settings_store()
+            self.preferences = read_preferences(self.settings)
             self.touches = []                                 # (device, x, y in screen pixels, time)
             self.touch_at = 0.0
             self.button_down = self.mouse_key = self.finger = self.grip = self.drag_from = None
@@ -1955,7 +1970,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             self.top_act = act("Float on Top", ["Ctrl+T"], self.toggle_top, checkable=True)
             self.top_act.setChecked(on_top)
             self.touches_act = act("Show touches", [], self.show_touches, checkable=True)
-            self.touches_act.setChecked(self.settings.value("show_touches", True, type=bool))
+            self.touches_act.setChecked(self.preferences["show_touches"])
+            self.settings_act = act("Settings…", ["Ctrl+,"], self.open_settings)
+            self.settings_act.setMenuRole(QAction.MenuRole.PreferencesRole)
             self.items = [act("Screenshot", ["Ctrl+S"], self.screenshot), act("Record / Stop", ["Ctrl+R"], self.record),
                           None,
                           act("Sound: hear what the board plays", ["Ctrl+L"], lambda: self.audio_action("listen", 2)),
@@ -1965,7 +1982,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                           act("Bigger", ["Ctrl+=", "Ctrl++"], lambda: self.apply_zoom(self.zoom * 1.25)),
                           act("Smaller", ["Ctrl+-"], lambda: self.apply_zoom(self.zoom * .8)),
                           act("Actual size", ["Ctrl+0"], lambda: self.apply_zoom(1.0)),
-                          None, self.touches_act, self.top_act]
+                          None, self.touches_act, self.top_act, None, self.settings_act]
             self.quit_act = act("Quit espmirror mirror", ["Ctrl+Q"], self.close)
             self.quit_act.setMenuRole(QAction.MenuRole.QuitRole)
 
@@ -1987,6 +2004,32 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         def toggle_top(self, on):
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on)
             self.show()
+            self.settings.setValue("on_top", on)
+
+        def open_settings(self):
+            before = read_preferences(self.settings)
+            if not edit_preferences(self, self.settings):
+                return
+            self.preferences = read_preferences(self.settings)
+            after = self.preferences
+            if after["on_top"] != before["on_top"]:
+                self.top_act.setChecked(after["on_top"])
+                self.toggle_top(after["on_top"])
+            self.touches_act.setChecked(after["show_touches"])
+            self.show_touches(after["show_touches"])
+            if after["scale"] != before["scale"]:
+                self.apply_zoom(after["scale"], say=False)
+            self.notice("settings saved")
+
+        def restore_position(self):
+            position = self.settings.value("position") if self.preferences["remember_position"] else None
+            screen = QGuiApplication.screenAt(position) if isinstance(position, QPoint) else None
+            area = (screen or QGuiApplication.primaryScreen()).availableGeometry()
+            if not isinstance(position, QPoint):
+                position = QPoint(area.center().x() - self.width() // 2,
+                                  area.center().y() - self.height() // 2)
+            self.move(max(area.left(), min(position.x(), area.right() + 1 - self.width())),
+                      max(area.top(), min(position.y(), area.bottom() + 1 - self.height())))
 
         # -- screenshot, recording --------------------------------------------------------------------------
         def screenshot(self):
@@ -1997,10 +2040,16 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             stamp = time.strftime("%Y%m%d-%H%M%S")
             paths = []
             for i, d in enumerate(shots):
-                paths.append(desktop_path("png", "" if len(shots) == 1 else "-%d" % (i + 1), stamp))
-                d.image.save(paths[-1])
-            paths.append(desktop_path("png", "-window", stamp))
-            self.render_devices().save(paths[-1])
+                path = capture_path("png", "" if len(shots) == 1 else "-%d" % (i + 1), stamp,
+                                    self.preferences["screenshots"])
+                if not d.image.save(path):
+                    self.notice("could not save screenshot: " + path)
+                    return
+                paths.append(path)
+            paths.append(capture_path("png", "-window", stamp, self.preferences["screenshots"]))
+            if not self.render_devices().save(paths[-1]):
+                self.notice("could not save screenshot: " + paths[-1])
+                return
             for path in paths:
                 print("saved", path, flush=True)
             self.notice("saved " + os.path.basename(paths[0]), flash=True)
@@ -2022,11 +2071,18 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 return
             w, h = self.devices_size()
             size = (w + w % 2, h + h % 2)                     # x264 wants even sides; kept for the whole take
-            path = desktop_path("mp4")
-            proc = subprocess.Popen([ffmpeg, "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra",
-                                     "-s", "%dx%d" % size, "-r", "25", "-i", "-", "-c:v", "libx264",
-                                     "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", path],
-                                    stdin=subprocess.PIPE)
+            path = capture_path("mp4", folder=self.preferences["recordings"])
+            if not os.path.isdir(os.path.dirname(path)):
+                self.notice("recording folder is unavailable: " + os.path.dirname(path))
+                return
+            try:
+                proc = subprocess.Popen([ffmpeg, "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra",
+                                         "-s", "%dx%d" % size, "-r", "25", "-i", "-", "-c:v", "libx264",
+                                         "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", path],
+                                        stdin=subprocess.PIPE)
+            except OSError as error:
+                self.notice("could not start recording: " + str(error))
+                return
             q = queue.Queue(maxsize=50)
 
             def write():
@@ -2048,7 +2104,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 print(("saved " if good else "ffmpeg failed: ") + path, flush=True)
                 bridge.saved.emit(("saved " if good else "ffmpeg failed, ") + os.path.basename(path))
 
-            self.rec = dict(size=size, queue=q, t0=time.monotonic(), n=0, thread=threading.Thread(target=write))
+            self.rec = dict(size=size, queue=q, t0=time.monotonic(), n=0, process=proc,
+                            thread=threading.Thread(target=write))
             self.rec["thread"].start()
             self.rec_timer.start()
             self.notice("recording")
@@ -2057,6 +2114,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             """25 frames a second by the clock: a late tick repeats the frame it has."""
             rec = self.rec
             if not rec:
+                return
+            if rec["process"].poll() is not None:
+                self.record()
                 return
             due = int((time.monotonic() - rec["t0"]) * 25) + 1
             if due <= rec["n"]:
@@ -2070,6 +2130,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             rec["n"] = due
 
         def closeEvent(self, e):
+            if self.preferences["remember_position"]:
+                self.settings.setValue("position", self.pos())
+            self.settings.sync()
             self.audio_io.close()
             rec = self.rec
             if rec:
@@ -2096,8 +2159,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         win.fill_menu(bar.addMenu("View")).addAction(win.quit_act)
         win.menu_bar = bar
     win.apply_zoom(scale, say=False)
-    area = QGuiApplication.primaryScreen().availableGeometry()
-    win.move(area.center().x() - win.width() // 2, area.center().y() - win.height() // 2)
+    win.restore_position()
     win.show()
     win.raise_()
     win.activateWindow()
@@ -2116,20 +2178,51 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("hosts", nargs="*", help="board address[:port] or serial port; none: USB boards (add --wifi for mDNS)")
     ap.add_argument("--list", action="store_true", help="list USB boards; add --wifi for network boards")
-    ap.add_argument("--sound", action="store_true", help="start listening to the first board's speaker")
+    ap.add_argument("--sound", action=argparse.BooleanOptionalAction, default=None,
+                    help="start listening to the first board's speaker")
+    ap.add_argument("--settings", action="store_true", help="edit viewer preferences without connecting to boards")
     ap.add_argument("--stats", action="store_true", help="print headless frame statistics")
     ap.add_argument("--seconds", type=float, default=5, help="duration for --stats")
-    ap.add_argument("--wifi", action="store_true", help="also discover network boards over mDNS")
+    ap.add_argument("--wifi", action=argparse.BooleanOptionalAction, default=None,
+                    help="also discover network boards over mDNS")
+    ap.add_argument("--usb", action=argparse.BooleanOptionalAction, default=None, help="discover USB boards")
     ap.add_argument("--log", help="append timestamped cable console lines to FILE")
     ap.add_argument("--png", help="save the first board's screen once it is still, and exit")
-    ap.add_argument("--scale", type=float, default=1.0, help="times the real size")
-    ap.add_argument("--on-top", action="store_true", help="float on top")
+    ap.add_argument("--scale", type=float, help="times the real size")
+    ap.add_argument("--on-top", action=argparse.BooleanOptionalAction, default=None, help="float on top")
     ap.add_argument("--wall", action="store_true", help="a dark backdrop behind the boards (default with several)")
     ap.add_argument("--devices", help="device photos (default: devices/ next to this file, if there)")
     args = ap.parse_args()
 
+    from espmirror_settings import DEFAULTS, edit_preferences, read_preferences, validate_hosts
+    preferences = DEFAULTS.copy()
+    graphical = not (args.list or args.stats or args.png)
+    if args.settings or graphical:
+        if importlib.util.find_spec("PySide6") is None:
+            print("the window needs PySide6: pip install PySide6 zeroconf numpy", file=sys.stderr)
+            return 1
+        if args.settings:
+            from PySide6.QtWidgets import QApplication
+            app = QApplication.instance() or QApplication(sys.argv[:1])
+            app.setApplicationName("espmirror")
+            edit_preferences()
+            return 0
+        preferences = read_preferences()
+    for key in ("scale", "on_top", "sound", "wifi", "usb", "log"):
+        if getattr(args, key) is None:
+            setattr(args, key, preferences[key])
+    if not math.isfinite(args.scale) or args.scale <= 0:
+        ap.error("--scale must be finite and positive")
+
+    explicit = list(args.hosts)
+    if not explicit and graphical:
+        try:
+            explicit = validate_hosts(preferences["hosts"]).split()
+        except ValueError as error:
+            print("invalid saved targets: %s Use --settings to edit them." % error, file=sys.stderr)
+            return 1
     if args.list or not args.hosts:
-        usb = usb_boards()
+        usb = usb_boards() if args.usb else []
         on_usb = {mac for _port, mac in usb if mac}
         net = [b for b in (discover() if args.wifi else []) if not b[3] or b[3] not in on_usb]    # a board on both: the cable
         if args.list:
@@ -2138,10 +2231,13 @@ def main():
             for name, addr, port, _mac in net:
                 print("%-40s %s:%d" % (name, addr, port))
             return 0
-        if not usb and not net:
-            print("no board answers as a mirror; pass its serial port or address, or add --wifi for mDNS", file=sys.stderr)
+        if not usb and not net and not explicit:
+            print("no board answers as a mirror; pass its serial port or address, add --wifi for mDNS, "
+                  "or use --settings to edit viewer preferences", file=sys.stderr)
             return 1
         targets = [(port, PORT) for port, _mac in usb] + [(addr, port) for _name, addr, port, _mac in net]
+        targets += [(h, PORT) if is_port(h) else parse_host(h) for h in explicit]
+        targets = list(dict.fromkeys(targets))
     else:
         targets = [(h, PORT) if is_port(h) else parse_host(h) for h in args.hosts]
 
@@ -2168,9 +2264,6 @@ def main():
     devices = args.devices or os.path.join(os.path.dirname(os.path.abspath(__file__)), "devices")
     if args.devices and not os.path.isdir(args.devices):
         print("no such directory: %s" % args.devices, file=sys.stderr)
-        return 1
-    if importlib.util.find_spec("PySide6") is None:
-        print("the window needs PySide6: pip install PySide6 zeroconf numpy", file=sys.stderr)
         return 1
     return run_window(targets, args.scale, args.on_top, args.wall or len(targets) > 1,
                       devices if os.path.isdir(devices) else None, log_file=args.log, sound=args.sound)
