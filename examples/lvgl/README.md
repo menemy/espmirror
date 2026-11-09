@@ -16,6 +16,7 @@ and `CONFIG_ESPMIRROR_AUDIO`.
 | Waveshare ESP32-S3-Touch-AMOLED-2.16 | CO5300, 480 × 480 QSPI | CST9220 | KEY (1), BOOT (2), PWR (3) | No programmable board LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 | Waveshare ESP32-S3-Touch-AMOLED-1.75C | CO5300, 466 × 466 round QSPI | CST9217 | KEY (1), BOOT (2) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 | Waveshare ESP32-S3-Touch-LCD-3.49 V2 | AXS15231B, 172 × 640 QSPI | AXS15231B | BOOT (2), PWR (3) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
+| Waveshare ESP32-S3 e-Paper 1.54G | 200 × 200, black/white/yellow/red | None | BOOT (2), PWR (3) | GPIO3, active-low user LED | ES8311 speaker and mic | Not yet |
 
 ## Waveshare AMOLED 2.16
 
@@ -92,6 +93,28 @@ and amplifier. BOOT (GPIO0) and PWR (GPIO16) map to viewer codes 2 and 3.
 
 The hardware reference is Waveshare's
 [V2 factory example](https://github.com/waveshareteam/ESP32-S3-Touch-LCD-3.49-V2/tree/main/ESP-IDF/11_FactoryProgram).
+
+## Waveshare e-Paper 1.54G
+
+The `sdkconfig.waveshare-154g` overlay selects the 200 × 200 four-color panel.
+LVGL and the viewer retain the full RGB565 animation. Physical panel updates
+run in a separate task: RGB565 pixels are mapped to black, white, yellow or
+red in a 10,000-byte pending frame. Each completed LVGL frame is copied to a
+second 10,000-byte buffer before notifying the panel task. That task snapshots
+only completed frames into its DMA buffer and performs a full refresh. Updates
+coalesce while a refresh is running. The next refresh starts at least 15
+seconds after the previous refresh ends. The panel enters deep sleep between
+refreshes. Each refresh logs its elapsed time; hardware duration is not yet
+measured.
+
+GPIO17 holds the power latch, GPIO6 enables panel power and GPIO42 enables
+audio power. BOOT (GPIO0) and PWR (GPIO18) map to viewer codes 2 and 3. The
+active-low user LED on GPIO3 follows the example's playback and idle blink
+state. ES8311 supplies both speaker output and microphone input. No touch
+controller is present; the viewer pointer operates the UI.
+
+The hardware reference is Waveshare's
+[ESP-IDF examples](https://github.com/waveshareteam/ESP32-S3-ePaper-1.54G/tree/main/Example/ESP-IDF_5.5.1).
 
 ## Hardware checks
 

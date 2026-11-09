@@ -519,6 +519,7 @@ static void lv_task(void *arg) {
     for (;;) {
         xSemaphoreTake(s_lv_lock, portMAX_DELAY);
         board_keys_poll();
+        board_led_set(__atomic_load_n(&s_playing, __ATOMIC_RELAXED) || (esp_timer_get_time() / 500000) % 2);
         int ev;
         if (__atomic_exchange_n(&s_keys_lost, false, __ATOMIC_RELAXED)) {
             while (xQueueReceive(s_keys, &ev, 0) == pdTRUE) {}     /* what is queued may lack its release */
@@ -608,6 +609,11 @@ void app_main(void) {
         {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
         {ESPMIRROR_KEY_POWER, "PWR", -1, -1},
     };
+#elif CONFIG_EXAMPLE_BOARD_WAVESHARE_154G
+    static const espmirror_button_t buttons[] = {
+        {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
+        {ESPMIRROR_KEY_POWER, "PWR", -1, -1},
+    };
 #endif
     const espmirror_config_t cfg = {
         .name = CONFIG_EXAMPLE_MIRROR_NAME,
@@ -623,7 +629,7 @@ void app_main(void) {
         .on_listen = on_listen,
         .on_talk = on_talk,
         .on_talk_audio = on_talk_audio,
-#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C || CONFIG_EXAMPLE_BOARD_WAVESHARE_349
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C || CONFIG_EXAMPLE_BOARD_WAVESHARE_349 || CONFIG_EXAMPLE_BOARD_WAVESHARE_154G
         .buttons = buttons,
         .button_count = sizeof(buttons) / sizeof(buttons[0]),
 #endif

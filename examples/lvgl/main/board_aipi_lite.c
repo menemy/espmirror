@@ -232,3 +232,7 @@ unsigned board_keys_down(void) {
 }
 
 #endif
+
+#if !CONFIG_EXAMPLE_BOARD_WAVESHARE_154G
+void board_led_set(bool on) { (void)on; }
+#endif

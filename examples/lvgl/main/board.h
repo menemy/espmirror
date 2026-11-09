@@ -33,3 +33,5 @@ void board_speaker_write(const int16_t *mono, size_t frames);
 
 /* The board's own buttons, a bit per key code (1 << key) while held. */
 unsigned board_keys_down(void);
+
+void board_led_set(bool on);

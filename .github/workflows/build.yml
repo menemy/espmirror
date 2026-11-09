@@ -26,6 +26,16 @@ jobs:
           - idf: "v5.4.3"
             example: lvgl
             target: esp32s3
+            variant: waveshare-154g
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-154g"
+          - idf: "v6.0.1"
+            example: lvgl
+            target: esp32s3
+            variant: waveshare-154g
+            defaults: "sdkconfig.defaults;sdkconfig.waveshare-154g"
+          - idf: "v5.4.3"
+            example: lvgl
+            target: esp32s3
             variant: waveshare-349
             defaults: "sdkconfig.defaults;sdkconfig.waveshare-349"
           - idf: "v6.0.1"
