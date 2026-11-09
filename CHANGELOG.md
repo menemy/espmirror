@@ -19,9 +19,9 @@ CI covers macOS, Linux and Windows; capture defaults use platform Desktop
 paths. Virtual presets supply device names, geometry and keys.
 
 LVGL board implementations add Waveshare AMOLED 2.16 and 1.75C, LCD 3.49 V2,
-and e-Paper 1.54G, with board-specific panel, input and audio paths. The round
-UI fits inside the panel. Example READMEs distinguish builds from hardware
-validation. Round screen metadata and viewer sizing use active diameter.
+e-Paper 1.54G, and P4 LCD 3.5, with board-specific panel, input and audio paths.
+The P4 example needs ESP-IDF 6.0.3. The round UI fits inside the panel.
+Example READMEs distinguish builds from hardware validation. Round screen metadata and viewer sizing use active diameter.
 
 QOI and row-only RLE reuse successful trial output. USB queue items retain
 only payload sizes accepted by the configured build. Host benchmark results

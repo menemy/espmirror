@@ -345,9 +345,9 @@ both discovery and the saved target list. Headless `--list`, `--stats` and
   board, a spectrogram, the board's LED. On a board the example knows
   (`menuconfig` → espmirror example → The board) it drives the board's own
   panel, speaker, microphone and buttons too. Board implementations include
-  XOrigin AIPI Lite, Waveshare AMOLED 2.16 and 1.75C, LCD 3.49 V2, and e-Paper
-  1.54G. See its [README](examples/lvgl/README.md) for capabilities, build
-  overlays and hardware validation status. On a generic devkit the mirror
+  XOrigin AIPI Lite, Waveshare AMOLED 2.16 and 1.75C, LCD 3.49 V2, e-Paper
+  1.54G, and P4 LCD 3.5. See its [README](examples/lvgl/README.md) for
+  capabilities, build overlays and hardware validation status. On a generic devkit the mirror
   supplies the display and audio output.
 - [`examples/mosaico`](examples/mosaico): ESP32-S31 with ESP-Iris, a
   mirror-only default and an optional physical panel/touch/key build. Requires
