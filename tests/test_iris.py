@@ -70,6 +70,7 @@ class IrisGateway(unittest.TestCase):
         from websockets.sync.client import connect
         from websockets.sync.server import serve
         self.requests = []
+        self.operations = {}
         self.started = threading.Event()
         self.finished = threading.Event()
         self.reused = False
@@ -85,9 +86,15 @@ class IrisGateway(unittest.TestCase):
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(payload)))
                 self.end_headers()
-                self.wfile.write(payload)
+                try:
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # Cancellation may close HTTP before the durable result is read.
 
             def do_GET(self):
+                if self.path.startswith('/v2/operations/'):
+                    self.answer(outer.operations[self.path.rsplit('/', 1)[1]])
+                    return
                 self.answer({'devices': [{'device_id': DEVICE, 'connected': True, 'data_available': True},
                                          {'device_id': 'a' * 32, 'connected': False}]})
 
@@ -95,8 +102,10 @@ class IrisGateway(unittest.TestCase):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
                 outer.requests.append((self.path, body))
                 if self.path.endswith('/mirror/start'):
+                    result = dict(description=DESC, stream_id=7, reused=outer.reused)
+                    outer.operations[self.headers['X-Operation-ID']] = {'status': 'succeeded', 'result': result}
                     outer.started.set()
-                    self.answer({'mirror': dict(description=DESC, stream_id=7, reused=outer.reused)})
+                    self.answer({'mirror': result})
                 elif self.path.endswith('/mirror/stop'):
                     outer.finished.set()
                     self.answer({'mirror': {'state': 'stopped'}})
@@ -162,9 +171,9 @@ class IrisGateway(unittest.TestCase):
             self.assertEqual([struct.unpack('<BBhhHI', p)[0] for p in payloads[:3]], [0, 1, 2])
             self.assertEqual(payloads[-2:], [b'\x02\x01', b'\x02\x00'])
         finally:
-            client.close()
+            client.cleanup()
         self.assertTrue(self.finished.is_set())
-        client.close()
+        client.cleanup()
         self.assertEqual(sum(path.endswith('/mirror/stop') for path, _ in self.requests), 1)
 
     def test_reused_stream_releases_own_input_without_stopping(self):
@@ -172,7 +181,7 @@ class IrisGateway(unittest.TestCase):
         client = iris.IrisClient(self.url, DEVICE)
         client.open()
         client.send(bytes((6, 3, 1)))
-        client.close()
+        client.cleanup()
         self.assertFalse(self.finished.is_set())
         self.assertEqual(self.requests[-1][1]['payload_hex'], '0300')
 
@@ -199,11 +208,11 @@ class IrisGateway(unittest.TestCase):
         client.open()
         with patch.object(iris, 'request_json', side_effect=ConnectionError('temporary failure')):
             with self.assertRaises(ConnectionError):
-                client.close()
+                client.cleanup()
         self.assertTrue(client.owns_stream)
         self.assertFalse(client.closed)
         self.assertIsNone(client.socket)
-        client.close()
+        client.cleanup()
         self.assertTrue(client.closed)
         self.assertTrue(self.finished.is_set())
 
@@ -216,18 +225,18 @@ class IrisGateway(unittest.TestCase):
         client.send(struct.pack('<BHH', 1, 2, 1))
         rpc = client.rpc
 
-        def fail_one(service, method, payload):
+        def fail_one(service, method, payload, **kwargs):
             if service == 0x4553 and payload == b'\x01\x00':
                 raise ConnectionError('temporary key failure')
-            return rpc(service, method, payload)
+            return rpc(service, method, payload, **kwargs)
 
         with patch.object(client, 'rpc', side_effect=fail_one):
             with self.assertRaises(ConnectionError):
-                client.close()
+                client.cleanup()
         self.assertEqual(client.keys_down, {1})
         self.assertFalse(client.pointer_down)
         self.assertFalse(client.closed)
-        client.close()
+        client.cleanup()
         self.assertTrue(client.closed)
         self.assertFalse(self.finished.is_set())
 
@@ -235,12 +244,12 @@ class IrisGateway(unittest.TestCase):
         request = iris.request_json
         stops = []
 
-        def fail_once(base, path, body=None):
+        def fail_once(base, path, body=None, **kwargs):
             if path.endswith('/mirror/stop'):
                 stops.append(path)
                 if len(stops) == 1:
                     raise ConnectionError('temporary stop failure')
-            return request(base, path, body)
+            return request(base, path, body, **kwargs)
 
         with patch.object(iris, 'request_json', side_effect=fail_once):
             link = mirror.make_link('iris:' + DEVICE, gateway=self.url).start()

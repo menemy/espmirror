@@ -940,6 +940,51 @@ class Link:
                 self.stopped.wait(2)
 
 
+class IrisInputQueue(queue.Queue):
+    """Bounded edge queue plus one replaceable pointer-move slot."""
+
+    def _init(self, maxsize):
+        super()._init(maxsize)
+        self.motion = None
+        self.pointer_down = False
+
+    def _qsize(self):
+        return len(self.queue) + (self.motion is not None)
+
+    def _get(self):
+        if self.queue:
+            return super()._get()
+        payload, self.motion = self.motion, None
+        return payload
+
+    def clear(self):
+        with self.mutex:
+            self.unfinished_tasks -= self._qsize()
+            self.queue.clear()
+            self.motion = None
+            self.pointer_down = False
+
+    def put_nowait(self, payload):
+        pointer = len(payload) == 5 and payload[0] in (0, 1)
+        with self.not_full:
+            if pointer and payload[0] and self.pointer_down:
+                if self.motion is None:
+                    self.unfinished_tasks += 1
+                self.motion = payload
+            else:
+                if len(self.queue) >= self.maxsize:
+                    raise queue.Full
+                # An edge supersedes any unsent move, including its old gesture.
+                if self.motion is not None:
+                    self.motion = None
+                    self.unfinished_tasks -= 1
+                if pointer:
+                    self.pointer_down = bool(payload[0])
+                self._put(payload)
+                self.unfinished_tasks += 1
+            self.not_empty.notify()
+
+
 class IrisLink(Link):
     def __init__(self, host, port=PORT, log_file=None, gateway=None):
         super().__init__(host, port, log_file)
@@ -949,7 +994,7 @@ class IrisLink(Link):
         parse_host(host)
         self.client = None
         self.bytes_received = 0
-        self.out = queue.Queue(maxsize=64)
+        self.out = IrisInputQueue(maxsize=64)
 
     def send(self, payload):
         if payload[:1] not in (b"\x00", b"\x01", b"\x03", b"\x06"):
@@ -981,18 +1026,28 @@ class IrisLink(Link):
             except Exception as error:
                 if self.alive:
                     self.status("Iris input: %s" % error)
-                client.socket.close()
+                client.cancel()
                 return
 
     def run(self):
-        from espmirror_iris import IrisClient
+        from espmirror_iris import CLEANUP_SECONDS, IrisClient
         pending = None
+        cleanup_deadline = None
+        cleanup_retries = 0
         while self.alive:
             if pending:
                 try:
-                    pending.close()
+                    cleanup_deadline = time.monotonic() + CLEANUP_SECONDS
+                    pending.cleanup(deadline=cleanup_deadline)
                     pending = None
+                    cleanup_retries = 0
                 except Exception as error:
+                    cleanup_retries += 1
+                    if cleanup_retries >= 3:
+                        message = "Iris cleanup failed after 3 retries; reconnect manually: %s" % error
+                        print(message, file=sys.stderr)
+                        self.status(message)
+                        return
                     self.status("Iris cleanup: %s, retrying" % error)
                     self.stopped.wait(2)
                     continue
@@ -1006,8 +1061,7 @@ class IrisLink(Link):
                 assembler = client.open()
                 if not self.alive:
                     break
-                while not self.out.empty():
-                    self.out.get_nowait()
+                self.out.clear()
                 with self.lock:
                     self.fb = np.zeros((assembler.height, assembler.width), "<u2")
                     self.seen = np.zeros(self.fb.shape, bool)
@@ -1032,21 +1086,23 @@ class IrisLink(Link):
                     self.status("%s: %s, retrying" % (self.host, error))
             finally:
                 self.client = None
+                cleanup_deadline = time.monotonic() + CLEANUP_SECONDS
+                client.cancel()
                 if writer:
-                    writer.join(4)
+                    writer.join(max(0, cleanup_deadline - time.monotonic()))
                 try:
-                    client.close()
+                    client.cleanup(deadline=cleanup_deadline)
                 except Exception as error:
                     pending = client
-                    if self.alive:
-                        self.status("Iris disconnect: %s" % error)
+                    print("Iris disconnect: %s" % error, file=sys.stderr)
             if self.alive:
                 self.stopped.wait(2)
         if pending:
             try:
-                pending.close()
+                pending.cleanup(deadline=cleanup_deadline)
             except Exception as error:
-                self.status("Iris cleanup failed: %s; the Gateway may still have held input or a running mirror" % error)
+                print("Iris cleanup failed: %s; the Gateway may still have held input or a running mirror" % error,
+                      file=sys.stderr)
 
 
 def make_link(host, port=PORT, log_file=None, gateway=None):
@@ -2438,6 +2494,12 @@ def main():
     ap.add_argument("--wall", action="store_true", help="a dark backdrop behind the boards (default with several)")
     ap.add_argument("--devices", help="device photos (default: devices/ next to this file, if there)")
     args = ap.parse_args()
+
+    from espmirror_iris import gateway_url
+    try:
+        args.iris_gateway = gateway_url(args.iris_gateway)
+    except ValueError as error:
+        ap.error("--iris-gateway: %s" % error)
 
     from espmirror_settings import DEFAULTS, edit_preferences, read_preferences, validate_hosts
     preferences = DEFAULTS.copy()
