@@ -603,6 +603,11 @@ void app_main(void) {
         {ESPMIRROR_KEY_AUX, "KEY", -1, -1},
         {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
     };
+#elif CONFIG_EXAMPLE_BOARD_WAVESHARE_349
+    static const espmirror_button_t buttons[] = {
+        {ESPMIRROR_KEY_MAIN, "BOOT", -1, -1},
+        {ESPMIRROR_KEY_POWER, "PWR", -1, -1},
+    };
 #endif
     const espmirror_config_t cfg = {
         .name = CONFIG_EXAMPLE_MIRROR_NAME,
@@ -618,7 +623,7 @@ void app_main(void) {
         .on_listen = on_listen,
         .on_talk = on_talk,
         .on_talk_audio = on_talk_audio,
-#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C || CONFIG_EXAMPLE_BOARD_WAVESHARE_349
         .buttons = buttons,
         .button_count = sizeof(buttons) / sizeof(buttons[0]),
 #endif

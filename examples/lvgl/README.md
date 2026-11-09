@@ -15,6 +15,7 @@ and `CONFIG_ESPMIRROR_AUDIO`.
 | XOrigin AIPI Lite | ST7789, 128 × 128 SPI | None | BOOT/talk (2), PWR (3) | Viewer indicator only | ES8311 speaker and mic | Not yet for this revision |
 | Waveshare ESP32-S3-Touch-AMOLED-2.16 | CO5300, 480 × 480 QSPI | CST9220 | KEY (1), BOOT (2), PWR (3) | No programmable board LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 | Waveshare ESP32-S3-Touch-AMOLED-1.75C | CO5300, 466 × 466 round QSPI | CST9217 | KEY (1), BOOT (2) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
+| Waveshare ESP32-S3-Touch-LCD-3.49 V2 | AXS15231B, 172 × 640 QSPI | AXS15231B | BOOT (2), PWR (3) | No user LED | ES8311 speaker, ES7210 dual mic downmixed to mono | Not yet |
 
 ## Waveshare AMOLED 2.16
 
@@ -75,6 +76,22 @@ bus; the mirror uses mono samples. ALDO1 supplies the codecs at 3.3 V.
 
 The hardware reference is Waveshare's
 [1.75C BSP revision 010c5fb](https://github.com/waveshareteam/Waveshare-ESP32-components/tree/010c5fb39ea7f0e996efd1f8e162cc70e569e57f/bsp/esp32_s3_touch_amoled_1_75c).
+
+## Waveshare LCD 3.49 V2
+
+The `sdkconfig.waveshare-349` overlay selects the V2 board with its 172 × 640
+AXS15231B panel. The name `Waveshare 3.49 V2` selects the viewer's 3.49 body.
+This pin mapping does not support V1 boards.
+
+AXS15231B QSPI transfers use sequential rows, so the example keeps a
+220,160-byte full frame in PSRAM and sends it through a 5,504-byte internal
+DMA buffer. LVGL renders RGB565 in the panel's byte order; the mirror copies
+and converts it before transmission. The touch controller uses a separate
+I2C bus. TCA9554 outputs control the power latch, panel reset, backlight enable
+and amplifier. BOOT (GPIO0) and PWR (GPIO16) map to viewer codes 2 and 3.
+
+The hardware reference is Waveshare's
+[V2 factory example](https://github.com/waveshareteam/ESP32-S3-Touch-LCD-3.49-V2/tree/main/ESP-IDF/11_FactoryProgram).
 
 ## Hardware checks
 

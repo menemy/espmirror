@@ -20,12 +20,17 @@ menu "espmirror example"
         config EXAMPLE_BOARD_WAVESHARE_175C
             bool "Waveshare 1.75C (ESP32S3, 466 x 466 CO5300)"
             depends on IDF_TARGET_ESP32S3
+
+        config EXAMPLE_BOARD_WAVESHARE_349
+            bool "Waveshare 3.49 V2 (ESP32S3, 172 x 640 AXS15231B)"
+            depends on IDF_TARGET_ESP32S3
     endchoice
 
     config EXAMPLE_BOARD_ID
         string
         default "waveshare_216" if EXAMPLE_BOARD_WAVESHARE_216
         default "waveshare_175c" if EXAMPLE_BOARD_WAVESHARE_175C
+        default "waveshare_349" if EXAMPLE_BOARD_WAVESHARE_349
         default "none"
 
     config EXAMPLE_MIRROR_NAME
@@ -33,13 +38,16 @@ menu "espmirror example"
         default "AIPI Lite" if EXAMPLE_BOARD_AIPI_LITE
         default "Waveshare 2.16" if EXAMPLE_BOARD_WAVESHARE_216
         default "Waveshare 1.75C" if EXAMPLE_BOARD_WAVESHARE_175C
+        default "Waveshare 3.49 V2" if EXAMPLE_BOARD_WAVESHARE_349
         default "espmirror lvgl"
         help
-            The viewer draws a device it knows ("Waveshare 2.16", "Waveshare 1.54G",
-            "Waveshare 1.75C", "AIPI Lite"); any other name gets a plain frame.
+            The viewer selects a known device body from a model fragment in
+            the name (for example "Waveshare 2.16" or "AIPI Lite"). Unknown
+            models get a plain frame.
 
     config EXAMPLE_MIRROR_WIDTH
         int "Screen width, pixels" if EXAMPLE_BOARD_NONE
+        default 172 if EXAMPLE_BOARD_WAVESHARE_349
         default 466 if EXAMPLE_BOARD_WAVESHARE_175C
         default 480 if EXAMPLE_BOARD_WAVESHARE_216
         default 128 if EXAMPLE_BOARD_AIPI_LITE
@@ -47,6 +55,7 @@ menu "espmirror example"
 
     config EXAMPLE_MIRROR_HEIGHT
         int "Screen height, pixels" if EXAMPLE_BOARD_NONE
+        default 640 if EXAMPLE_BOARD_WAVESHARE_349
         default 466 if EXAMPLE_BOARD_WAVESHARE_175C
         default 480 if EXAMPLE_BOARD_WAVESHARE_216
         default 128 if EXAMPLE_BOARD_AIPI_LITE
@@ -54,6 +63,7 @@ menu "espmirror example"
 
     config EXAMPLE_MIRROR_PPI
         int "Pixels per inch (for the viewer's real-size mode)"
+        default 190 if EXAMPLE_BOARD_WAVESHARE_349
         default 377 if EXAMPLE_BOARD_WAVESHARE_175C
         default 126 if EXAMPLE_BOARD_AIPI_LITE
         default 314 if EXAMPLE_BOARD_WAVESHARE_216
