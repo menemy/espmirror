@@ -110,6 +110,24 @@ by 14.6% and 11.4%. On the 240x240 solid pair the QOI selector increased from
 across these workloads. All paired wire sizes and output checksums matched.
 These results do not establish an ESP32, PSRAM or USB throughput gain.
 
+### Serial queue storage
+
+The serial queue retains the two-byte length and the largest payload accepted
+by the build. The reader still consumes messages up to 1024 bytes; the pump
+ignores lengths above the retained payload capacity. At 32 queue entries:
+
+| Audio | Previous item bytes | Current item bytes | Previous storage bytes | Current storage bytes | Reduction bytes |
+|---|---:|---:|---:|---:|---:|
+| Disabled | 1026 | 66 | 32832 | 2112 | 30720 |
+| Enabled | 1026 | 644 | 32832 | 20608 | 12224 |
+
+These are requested queue-item storage sizes, excluding the unchanged FreeRTOS
+queue control block and allocator overhead. Reader and pump stack objects
+remain unchanged. No target heap measurement is claimed. The host serial
+harness runs the production reader and pump with prefix-copy queue stubs under
+ASan/UBSan, for payload lengths 1..1024 followed by another frame, both audio
+configurations, and an incomplete payload at the receive deadline.
+
 ## ESP32-S3 estimate
 
 The CSV's `s3_budget_us_per_frame` is an **uncalibrated scalar cycle model** at

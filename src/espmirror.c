@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include "esp_mac.h"
 #include "esp_rom_crc.h"
 #if CONFIG_ESPMIRROR_TCP
@@ -109,6 +110,13 @@ static atomic_bool s_serial_open, s_session_busy;
 #define SERIAL_QUEUE 32
 static const uint8_t s_mark[] = { 0, 'M', 'I', 'R', 'R', 'O', 'R', '1', '\n' };
 typedef struct { uint16_t len; uint8_t b[IN_MAX]; } serial_msg_t;
+#if CONFIG_ESPMIRROR_AUDIO
+#define SERIAL_INPUT_MAX 642
+#else
+#define SERIAL_INPUT_MAX 64
+#endif
+/* The reader drains IN_MAX bytes; the queue keeps only inputs this build accepts. */
+#define SERIAL_ITEM_SIZE (offsetof(serial_msg_t, b) + SERIAL_INPUT_MAX)
 static QueueHandle_t s_serial_in;
 static SemaphoreHandle_t s_serial_tx, s_serial_done;
 
@@ -809,7 +817,7 @@ static void serial_pump(void)
             if (s_serial) viewer_send("E", 1, 500);   /* the viewer stops sending and asks again */
             serial_end();
             xSemaphoreGive(s_serial_done);
-        } else if (s_serial && s_serial_open) {
+        } else if (s_serial && s_serial_open && m.len <= SERIAL_INPUT_MAX) {
             input(m.b, m.len);
         }
     }
@@ -1021,7 +1029,7 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     flags |= ESPMIRROR_QOI;
 #endif
     if (!espmirror_core_init_ex(&s_core, s_w, s_h, flags, s_previous)) return ESP_ERR_NO_MEM;
-    s_serial_in = xQueueCreate(SERIAL_QUEUE, sizeof(serial_msg_t));
+    s_serial_in = xQueueCreate(SERIAL_QUEUE, SERIAL_ITEM_SIZE);
     s_text_in = xQueueCreate(TEXT_Q, sizeof(espmirror_text_t));
     s_serial_tx = xSemaphoreCreateMutex();
     s_serial_done = xSemaphoreCreateBinary();

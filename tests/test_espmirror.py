@@ -537,18 +537,23 @@ class CableFramingTests(unittest.TestCase):
     def test_firmware_session_pump(self):
         source = (ROOT / 'src/espmirror.c').read_text()
         impl = source[source.index('static void serial_end(void)\n'):source.index('static char s_log_line')]
-        impl += source[source.index('static bool serial_enqueue'):source.index('esp_err_t espmirror_serial_session')]
+        start = source.index('static bool serial_enqueue')
+        impl += source[start:source.index('static void viewer_drop', start)]
+        declarations = source[source.index('typedef struct { uint16_t len; uint8_t b[IN_MAX]; } serial_msg_t;'):source.index('static QueueHandle_t s_serial_in;')]
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             (folder / 'session_impl.inc').write_text(impl)
+            (folder / 'session_types.inc').write_text(declarations)
             exe = folder / 'session-harness'
             command = shlex.split(os.environ.get('CC', 'cc')) + [
                 '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                 '-I' + str(folder), str(ROOT / 'tests/espmirror_session_harness.c'), '-o', str(exe)]
-            result = subprocess.run(command, capture_output=True, text=True, env={**os.environ, 'TMPDIR': tempfile.gettempdir()})
-            self.assertEqual(result.returncode, 0, result.stderr)
-            result = subprocess.run([exe], capture_output=True, timeout=10)
-            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            for audio in (0, 1):
+                with self.subTest(audio=audio):
+                    result = subprocess.run(command + [f'-DCONFIG_ESPMIRROR_AUDIO={audio}'], capture_output=True, text=True, env={**os.environ, 'TMPDIR': tempfile.gettempdir()})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    result = subprocess.run([exe], capture_output=True, timeout=10)
+                    self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_windows_port_names(self):
         for port in ('COM1', 'com12', r'\\.\COM32'):

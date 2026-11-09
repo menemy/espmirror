@@ -56,6 +56,9 @@ Host-to-board messages retain plain `length:u32 + payload`, maximum **1024**
 bytes, to carry microphone PCM. All message fragments have a two-second
 receive deadline. Six seconds without a complete host message ends USB;
 host keepalive `02` is sent after about five idle seconds.
+The USB input queue retains up to 64 payload bytes without audio, or 642 with
+audio. Larger payloads within the 1024-byte framing limit are consumed with
+the same receive deadline and ignored; they do not become console input.
 
 Each USB frame and each formatted ESP_LOG record holds the same TX mutex.
 USB writes are at most 128 bytes and account for partial acceptance. Logging
