@@ -3,3 +3,7 @@
  */
 #pragma once
 #define SOC_USB_SERIAL_JTAG_SUPPORTED 1
+
+#ifndef SOC_WIFI_SUPPORTED
+#define SOC_WIFI_SUPPORTED 1
+#endif

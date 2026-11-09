@@ -18,6 +18,7 @@ typedef int esp_err_t;
 #define ESP_ERR_NOT_SUPPORTED 4
 #define ESP_ERR_TIMEOUT 5
 #define ESP_MAC_WIFI_STA 0
+#define ESP_MAC_BASE 1
 #define MALLOC_CAP_8BIT 1
 #define MALLOC_CAP_SPIRAM 2
 #define portMUX_INITIALIZER_UNLOCKED 0

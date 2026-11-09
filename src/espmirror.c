@@ -15,6 +15,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include "esp_mac.h"
+#include "soc/soc_caps.h"
 #include "esp_rom_crc.h"
 #if CONFIG_ESPMIRROR_IRIS
 #include "esp_iris.h"
@@ -1153,6 +1154,13 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     if ((size_t)config->width * 2 > CONFIG_ESP_IRIS_MEDIA_LATEST_BYTES) return ESP_ERR_INVALID_ARG;
 #endif
     if (CONFIG_ESPMIRROR_USB_NETWORK && config->external_console) return ESP_ERR_INVALID_ARG;   /* the component owns TinyUSB */
+    uint8_t mac[6];
+#if SOC_WIFI_SUPPORTED
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+#else
+    esp_err_t mac_err = esp_read_mac(mac, ESP_MAC_BASE);
+#endif
+    if (mac_err != ESP_OK) return mac_err;
     s_cfg = *config;
     /* The name as JSON needs it: a bounded copy, quotes and backslashes escaped, control characters out. */
     size_t at = 0;
@@ -1168,8 +1176,6 @@ esp_err_t espmirror_start(const espmirror_config_t *config) {
     s_name[at] = 0;
     s_w = config->width;
     s_h = config->height;
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     float diagonal = config->diagonal > 0 ? config->diagonal
         : config->ppi > 0 ? hypotf(s_w, s_h) / config->ppi : 0;
     s_board_len = snprintf(s_board, sizeof(s_board),
