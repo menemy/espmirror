@@ -21,6 +21,18 @@ on, and impossible to show to someone on a call. With the mirror the device
 is a window: you see what it shows, press what it has, and the recording
 goes into the bug report.
 
+## Try it without a board
+
+```sh
+python3 -m venv .venv && .venv/bin/pip install -r tools/requirements.txt
+.venv/bin/python tools/fake_board.py --board waveshare-s3-216 &
+.venv/bin/python tools/espmirror.py 127.0.0.1
+```
+
+`fake_board.py` speaks the protocol on 127.0.0.1 with a test pattern, and the
+viewer draws it as the Waveshare 2.16; `fake_board.py --list` names the other
+presets.
+
 ## What it does
 
 - **Frames** of changed rectangles, run-length coded, 25 a second at most;
@@ -85,6 +97,14 @@ or in `main/idf_component.yml`:
 ```yaml
 dependencies:
   menemy/espmirror: "^0.2"
+```
+
+The mirror goes over the USB cable when the console is on USB Serial/JTAG.
+The console is on the UART by default, and `espmirror_start()` then returns
+`ESP_ERR_NOT_SUPPORTED` unless TCP or ESP-Iris is on. In `sdkconfig.defaults`:
+
+```
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 ```
 
 Then start the component (Wi-Fi is not required for USB):

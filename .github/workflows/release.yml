@@ -1,0 +1,19 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The tag is the manifest's version
+        run: |
+          test "v$(sed -n 's/^version: "\(.*\)"$/\1/p' idf_component.yml)" = "$GITHUB_REF_NAME"
+      - uses: espressif/upload-components-ci-action@v2
+        with:
+          namespace: menemy
+          components: "espmirror:."
+          api_token: ${{ secrets.IDF_COMPONENT_API_TOKEN }}
