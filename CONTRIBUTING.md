@@ -1,23 +1,44 @@
 # Contributing
 
-## A device profile
+## A new device
 
-The most useful contribution: the viewer drawing your board as the device it
-is. It is one entry in `DEVICES` in `tools/espmirror.py`
-(docs/devices.md explains every field) and a screenshot.
+New devices are welcome. A pull request with the parts below is quick to
+review; one device per pull request.
 
-1. Find the maker's dimensional drawing: the body, where the active area of
-   the screen sits, the buttons on the edges, the LED. Millimetres, not
-   pixels.
-2. Add the entry. Pick a fragment of the name your firmware passes in
-   `espmirror_config_t.name` that no other profile matches.
-3. Run the viewer against the board, press every key, take a screenshot
-   (Cmd S) and put it next to the others in `docs/images/`.
-4. Open a pull request with the entry, the screenshot and a link to the
-   drawing. Mention the key codes your firmware maps (1, 2, 3).
+1. **The drawing.** Sizes come from the maker's dimensional drawing: the body,
+   where the screen's active area sits, the buttons on the edges, the LED.
+   Millimetres, not pixels. Link the drawing in the pull request. A profile
+   measured by eye or from a product photo is not merged.
+2. **The profile.** One entry in `DEVICES` in `tools/espmirror.py`;
+   docs/devices.md explains every field. Its fragment is a piece of the name
+   your firmware passes in `espmirror_config_t.name` that picks this profile
+   and no other.
+3. **A preset.** One entry in `PRESETS` in `tools/fake_board.py`: the same
+   name, the resolution, the diagonal, touch and the keys. CI draws every
+   preset as the viewer does (the `profile-previews` artifact of the `viewer`
+   job), and the job summary lists which profile each name picks. Locally:
+   `python tests/preview_profiles.py previews`.
+4. **An image, if you have one.** Your own photograph shot as
+   tools/devices/README.md describes, or an AI-generated image; say which in
+   the pull request. Under 1.5 MB. Not a picture from a shop or a maker's
+   site. Without an image the viewer draws the body from the millimetres.
+5. **Checked on the board, or not.** Either run the viewer against the board,
+   press every key and put a screenshot in the pull request (not in the
+   repository), or say it was drawn with `fake_board.py` only. Both are
+   merged.
+
+Not in a device pull request: changes to the viewer, the protocol or the
+firmware, a second device, refactoring. Send them separately. Arduino
+support and new transports: open an issue first.
 
 No board? Open an issue with the "Add a device" template and the drawing;
 somebody with the board can finish it.
+
+## Bugs
+
+Open an issue with the "Bug" template: the computer's OS, the connection
+(USB serial, USB network, TCP or ESP-Iris), the chip, the ESP-IDF version and
+the viewer's log (`--log FILE`).
 
 ## Viewer
 

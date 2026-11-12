@@ -1,0 +1,46 @@
+name: Bug
+description: Something does not work in the viewer or the component
+title: "Bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: What you did, what you expected, what you saw instead
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Computer
+      description: OS and version, Python version
+      placeholder: macOS 26.1, Python 3.12
+    validations:
+      required: true
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection
+      options:
+        - USB serial
+        - USB network
+        - TCP
+        - ESP-Iris
+        - fake_board.py
+    validations:
+      required: true
+  - type: input
+    id: board
+    attributes:
+      label: Board
+      description: The board, the chip, and the ESP-IDF and LVGL versions
+      placeholder: Waveshare 2.16, ESP32-S3, ESP-IDF 6.0.1, LVGL 9.5
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: The viewer's output, or the file from `--log FILE`; the board's serial log if the board misbehaves
+      render: text

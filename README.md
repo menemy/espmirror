@@ -44,8 +44,8 @@ goes into the bug report.
 - **Device profiles**: the viewer knows the Waveshare 2.16 and 1.75C AMOLED
   boards, the 1.54G e-paper, the 3.49 bar LCD, the P4 3.5 LCD and the
   XOrigin AIPI Lite, each drawn
-  from an image of the device (mock-ups made from the makers' product
-  photographs today; a photograph of yours drops in). Another device is a line of
+  from an image of the device (AI-generated today; a photograph of yours
+  drops in). Another device is a line of
   millimetres and a picture (docs/devices.md).
 
 ## Minimum requirements
@@ -410,6 +410,5 @@ The wire is in [docs/protocol.md](docs/protocol.md). Device profiles in
 
 ## License
 
-Apache-2.0. The device images in the viewer are mock-ups derived from the
-makers' product photographs and published dimensions; the device names and
-designs are theirs.
+Apache-2.0. The device images in the viewer are AI-generated, sized to the
+published dimensions; the device names and designs belong to their makers.

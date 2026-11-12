@@ -56,8 +56,8 @@ shows the profile the name picks, and the fake board highlights keys and pointer
 
 Add `photo=dict(file="<name>.png", screen=(x, y, w, h))` to the
 profile: a front-on photograph of the device with the background cut out,
-and the screen's active area in the photo's pixels. The six built-in profiles carry mock-ups an image model made from
-photographs of the devices (straight on, screen off, background removed),
+and the screen's active area in the photo's pixels. The six built-in profiles carry AI-generated images of the devices
+(straight on, screen off, background removed),
 stretched to the drawings' millimetres; a photograph of the real thing is
 welcome in their place. The viewer draws the
 photograph as the body, scaled so its width is `body.w` millimetres, puts

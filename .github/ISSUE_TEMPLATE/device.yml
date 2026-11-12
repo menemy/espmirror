@@ -26,11 +26,11 @@ body:
   - type: textarea
     id: photo
     attributes:
-      label: Photo
-      description: A photo of the device from the front, straight on
+      label: Image
+      description: Optional. Your own photo of the device from the front, straight on, or an AI-generated image (say which). Not a picture from a shop or the maker's site
   - type: checkboxes
     id: offer
     attributes:
       label: Can you test?
       options:
-        - label: I have the board and can run the viewer against it
+        - label: I have the board and can run the viewer against it and press every key

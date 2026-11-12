@@ -13,7 +13,6 @@ How to shoot one:
 - note the screen's active area in the PNG's pixels: `x, y, w, h` of the lit pixels, not of the glass;
 - the PNG's width must be the body's width in the profile (`body.w` millimetres): the viewer scales by that.
 
-The images here are mock-ups: each was made by an image model (gpt-image-1, 2026-10) from a photograph of the
-device (the maintainer's own AIPI Lite; the makers' product photographs for the Waveshare boards), straightened,
-the screen switched off, the background removed. They are not the photographs themselves. A real photograph of your device, shot as
-above, is better still; replace the file and the screen rectangle and send a pull request.
+The images here are AI-generated (gpt-image-1, 2026-10): straight on, the screen off, the background removed.
+They are not photographs. A real photograph of your device, shot as above, is better; replace the file and the
+screen rectangle and send a pull request.
