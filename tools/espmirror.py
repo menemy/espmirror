@@ -82,20 +82,22 @@ ROLES = {1: "talk", 2: "aux", 3: "power", 4: "speaker"}
 #   body       shape="rect": w, h; x, y the active area's top left; r the corner radius
 #              shape="round": d the diameter, the active area centred
 #              finish: a name in FINISHES (the colours of the body and its buttons)
-#   glass      border: the cover glass's dark border around the active area; r its corner radius
+#   glass      border: the cover glass's dark border around the active area; r its corner radius;
+#              screen_r optional: the lit area's own corner radius, where the panel hides its corner pixels
 #   led        optional: x, y its centre, d its diameter, colour (r, g, b)
 #   studs      optional: d the diameter of the corner holes, at their centres (x, y)
 #   photo      optional: file, a front-on picture with the background cut out (PNG with alpha) in the
 #              --devices directory, stretched to the body's w x h (d x d); screen the active area's
 #              x, y, w, h in its pixels. The live screen goes there instead of at body x, y.
+#              rim optional: the body's own frame in its pixels, where the buttons' labels go
 # A board whose w x h lies the other way from the profile's active area gets the profile turned a quarter
 # counter-clockwise (its bottom edge on the right). The buttons are the board's own, from its hints.
 DEVICES = [('2.16',
   {'screen_mm': 38.99,
    'body': {'shape': 'rect', 'w': 44.6, 'h': 44.6, 'x': 2.8, 'y': 2.8, 'r': 5.5, 'finish': 'white'},
-   'glass': {'border': 2.15, 'r': 4.5},
-   'photo': {'file': 'waveshare-2.16.png', 'screen': (54, 54, 801, 807)},
-   'keys': [('key3', 1, 'top', 12.3, 5.3), ('pwr', 3, 'top', 22.3, 5.3), ('boot', 2, 'top', 32.3, 5.3)],
+   'glass': {'border': 2.15, 'r': 4.5, 'screen_r': 6.5},
+   'photo': {'file': 'waveshare-2.16.png', 'screen': (54, 44, 801, 807), 'rim': 26},
+   'keys': [('key3', 1, 'top', 11.2, 5.3), ('pwr', 3, 'top', 21.4, 5.3), ('boot', 2, 'top', 31.7, 5.3)],
    'hold': True}),
  ('1.54G',
   {'screen_mm': 27.8,
@@ -1202,7 +1204,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
     from PySide6.QtWidgets import QApplication, QMenu, QMenuBar, QToolTip, QWidget
 
     BUTTON = 34                      # talk, listen, record, screenshot, close
-    CORNER = 14                      # points from a corner of the devices' area that resize the window
+    CORNER = 24                      # points from a corner of the devices' area that resize the window
     GAP = 28                         # between boards side by side
     MIN_GLASS = 120                  # points: the screen is never drawn narrower, a tiny device is no use
     KEY_MM = 6.0                     # a button: .75 of this along the edge, .2 out of it
@@ -1354,8 +1356,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         g = glass["border"] * s
         grect = hole or (ax - g, ay - g, aw + 2 * g, ah + 2 * g)
         glass_r = (aw + 2 * g) / 2 if look["round"] else glass["r"] * s
-        active_r = aw / 2 if look["round"] else 0
-        keys = place_keys(look, brect, body_r, disc, (ax, ay, aw, ah), grect, s)
+        active_r = aw / 2 if look["round"] else glass.get("screen_r", 0) * s
+        rim = prof['photo']['rim'] * fy if photo and prof['photo'].get('rim') else None
+        keys = place_keys(look, brect, body_r, disc, (ax, ay, aw, ah), grect, s, rim)
         led = None
         if prof.get("led"):
             o = prof["led"]
@@ -1372,7 +1375,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                      max([r.right() - bx - bw for r in reach] + [0]), max([r.bottom() - by - bh for r in reach] + [0]))
         return L
 
-    def place_keys(look, brect, body_r, disc, active, grect, s):
+    def place_keys(look, brect, body_r, disc, active, grect, s, frame=None):
         """Each button on the body's edge nearest its hint, at the hint's place along it (on the rim, at its
         angle, for a disc); buttons without a hint along the bottom."""
         bx, by, bw, bh = brect
@@ -1457,6 +1460,9 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                                  dx=math.sin(a), dy=-math.cos(a), rim=body_r - grect[2] / 2,
                                  border=(grect[2] - aw) / 2, role=b["role"],
                                  label=str(b.get("name") or ROLES.get(b["role"], "")), w=T, h=Lk))
+        for k in keys if frame is not None else ():
+            if not k.get("face"):
+                k.update(rim=frame, border=0)
         for k in keys:            # the label beside it, reading along the edge: on the body's rim, or when that is
             rim_w, border = max(0.0, k["rim"]), max(0.0, k["border"])     # too thin, on the glass's dark border
             glassy = rim_w * .6 < 6.5 and border > rim_w
@@ -1772,7 +1778,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             right, bottom = max(b[0] + b[2] for b in bodies), max(b[1] + b[3] for b in bodies)
             self.lay = dict(buttons={name: (x0 + i * (BUTTON + 6), 4, BUTTON, BUTTON)
                                      for i, name in enumerate(("move", "talk", "listen", "rec", "shot", "close"))},
-                            corners=[((sx, sy), (left if sx < 0 else right, top if sy < 0 else bottom))
+                            corners=[((sx, sy), self.corner_at(sx, sy, left, top, right, bottom))
                                      for sx in (-1, 1) for sy in (-1, 1)])
             return self.lay
 
@@ -1975,19 +1981,28 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             app.setWindowIcon(QIcon(pm))
 
         # -- mouse ------------------------------------------------------------------------------------------
+        def corner_at(self, sx, sy, left, top, right, bottom):
+            """Where a drawn corner is: on the rounding of the device that sits furthest that way, not on the
+            empty point of its bounding box."""
+            x, y = left if sx < 0 else right, top if sy < 0 else bottom
+            d = max(self.devs, key=lambda d: sx * (d.L["body"][0] + d.L["body"][2] * (sx > 0))
+                    + sy * (d.L["body"][1] + d.L["body"][3] * (sy > 0)))
+            inset = d.L["body_r"] * (1 - math.sqrt(.5))
+            return x - sx * inset, y - sy * inset
+
         def where(self, pos):
             lay = self.arrange()
             x, y = pos.x(), pos.y()
             for name, (bx, by, bw, bh) in lay["buttons"].items():
                 if (x - bx - bw / 2) ** 2 + (y - by - bh / 2) ** 2 <= (bw / 2) ** 2:
                     return name, None, None
-            for side, (cx, cy) in lay["corners"]:                # any corner resizes, as a window's does
-                if abs(x - cx) <= CORNER and abs(y - cy) <= CORNER:
-                    return "corner", side, None
-            for d in self.devs:
+            for d in self.devs:                                  # a key wins over the corner it sits in
                 for k in d.L["keys"]:
                     if key_hit(k, pos):
                         return "key", k["role"], d
+            for side, (cx, cy) in lay["corners"]:                # any corner resizes, as a window's does
+                if abs(x - cx) <= CORNER and abs(y - cy) <= CORNER:
+                    return "corner", side, None
             for d in self.devs:
                 if on_glass(d.L, pos):
                     return "glass", None, d
@@ -2046,9 +2061,11 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             elif what == "corner":
                 at, corners = e.globalPosition(), dict(self.arrange()["corners"])
                 (x0, y0), (x1, y1) = corners[(-1, -1)], corners[(1, 1)]
-                ox, oy = corners[(-role[0], -role[1])]       # the opposite corner stays where it is on the desk
+                # The window's opposite corner stays where it is on the desk, not the device's: while the buttons
+                # hold the window's width, a device corner would slide the whole window sideways.
                 self.grip = dict(side=role, x0=at.x(), y0=at.y(), zoom=self.zoom, w=x1 - x0, h=y1 - y0,
-                                 anchor=(self.x() + ox, self.y() + oy))
+                                 anchor=(self.x() + (self.width() if role[0] < 0 else 0),
+                                         self.y() + (self.height() if role[1] < 0 else 0)))
             elif what in ("move", "body", "glass"):
                 self.start_move(e)
 
@@ -2065,8 +2082,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 dx, dy = sx * (at.x() - g["x0"]), sy * (at.y() - g["y0"])
                 grow = 1 + (dx * g["w"] + dy * g["h"]) / (g["w"] ** 2 + g["h"] ** 2)
                 self.apply_zoom(g["zoom"] * grow, say=False)
-                ox, oy = dict(self.arrange()["corners"])[(-sx, -sy)]
-                self.move(round(g["anchor"][0] - ox), round(g["anchor"][1] - oy))
+                self.move(g["anchor"][0] - (self.width() if sx < 0 else 0),
+                          g["anchor"][1] - (self.height() if sy < 0 else 0))
             elif self.drag_from is not None:
                 self.move(e.globalPosition().toPoint() - self.drag_from)
             elif not e.buttons():
