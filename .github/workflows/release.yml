@@ -1,8 +1,8 @@
 name: release
 
+# Run by hand on a version tag, once the repository has IDF_COMPONENT_API_TOKEN.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   registry:

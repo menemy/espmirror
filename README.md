@@ -88,15 +88,13 @@ Host tests do not establish target frame rates.
 
 ## Add it to a project
 
-```sh
-idf.py add-dependency "menemy/espmirror"
-```
-
-or in `main/idf_component.yml`:
+In `main/idf_component.yml`:
 
 ```yaml
 dependencies:
-  menemy/espmirror: "^0.2"
+  espmirror:
+    git: https://github.com/menemy/espmirror.git
+    version: v0.2.0
 ```
 
 The mirror goes over the USB cable when the console is on USB Serial/JTAG.
