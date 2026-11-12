@@ -72,6 +72,38 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(link.out.get_nowait(), b'\x03\x02')
         self.assertEqual(link.out.get_nowait(), b'\x06\x03\x01')
 
+    def test_icons_cycle_off_both_computer(self):
+        session = AudioSession.__new__(AudioSession)
+        session.listen_link = session.talk_link = None
+        session.listen_source = session.talk_lend = 0
+        session.listen_solo = False
+        link = SimpleNamespace(audio_route=True, send=Mock())
+
+        def listen(target, source):
+            session.listen_link, session.listen_source, session.listen_solo = target, source, False
+
+        def stop_listen():
+            if session.listen_solo:
+                session.listen_link.send(bytes([9, 0]))
+            session.listen_link, session.listen_source, session.listen_solo = None, 0, False
+
+        session.listen, session.stop_listen = listen, stop_listen
+        self.assertEqual([session.cycle_speaker(link) for _ in range(4)], [1, 2, 0, 1])
+        self.assertEqual([c.args[0] for c in link.send.call_args_list], [bytes([9, 1]), bytes([9, 0])])
+
+        link.send.reset_mock()
+        session.microphone_permission = lambda start: start()
+        session.start_talk = lambda target, lend=0: setattr(session, 'talk_link', target) or \
+            setattr(session, 'talk_lend', lend) or target.send(bytes([10, lend]))
+        session.stop_talk = lambda: session.talk_link and session.talk_link.send(bytes([10, 0])) or \
+            setattr(session, 'talk_link', None) or setattr(session, 'talk_lend', 0)
+        self.assertEqual([session.cycle_mic(link) for _ in range(3)], [1, 2, 0])
+        self.assertEqual([c.args[0] for c in link.send.call_args_list],
+                         [bytes([10, 1]), bytes([10, 2]), bytes([10, 0])])
+
+        plain = SimpleNamespace(audio_route=False, send=Mock())
+        self.assertEqual([session.cycle_speaker(plain) for _ in range(3)], [1, 0, 1])
+
     def test_microphone_without_a_declared_use_starts_at_once(self):
         core = SimpleNamespace(QCoreApplication=SimpleNamespace(instance=Mock()), QMicrophonePermission=Mock(),
                                Qt=SimpleNamespace(PermissionStatus=SimpleNamespace(Granted=1, Denied=2)))

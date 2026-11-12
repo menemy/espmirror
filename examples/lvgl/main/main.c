@@ -147,16 +147,16 @@ static void sound_task(void *arg) {
             sound = SOUND_NONE;
             if (xQueueReceive(s_talk, &audio, period) == pdTRUE
                 && __atomic_load_n(&s_talking, __ATOMIC_RELAXED)) {
+                espmirror_audio_output(audio.pcm, audio.count, 1);
                 board_speaker_write(audio.pcm, audio.count);
-                espmirror_audio_playback(audio.pcm, audio.count, 1);
                 playing = true;
             }
         } else {
             if (sound == SOUND_NONE && xQueueReceive(s_sounds, &sound, 0) == pdTRUE) t = 0;
             playing = sound != SOUND_NONE && synth(sound, t, audio.pcm);
             if (playing) {
-                espmirror_audio_playback(audio.pcm, CHUNK, 1);
                 tap_put(audio.pcm, CHUNK);
+                espmirror_audio_output(audio.pcm, CHUNK, 1);
                 if (s_has_audio) board_speaker_write(audio.pcm, CHUNK);
                 t += (float)CHUNK / RATE;
             } else sound = SOUND_NONE;
@@ -179,6 +179,7 @@ static void play(int sound) {
 static bool mic_wanted(void) {
     return s_has_audio && (__atomic_load_n(&s_listen_mic, __ATOMIC_RELAXED)
                            || __atomic_load_n(&s_mic_toggle, __ATOMIC_RELAXED)
+                           || espmirror_audio_input_wanted()
                            || (__atomic_load_n(&s_keys_held, __ATOMIC_RELAXED) & 1u << ESPMIRROR_KEY_MAIN));
 }
 
@@ -195,7 +196,7 @@ static void mic_task(void *arg) {
             vTaskDelay(1);
             continue;
         }
-        espmirror_audio_capture(pcm, n);
+        espmirror_audio_input(pcm, n);
         tap_put(pcm, n);
     }
 }
@@ -652,6 +653,7 @@ void app_main(void) {
         .on_listen = on_listen,
         .on_talk = on_talk,
         .on_talk_audio = on_talk_audio,
+        .audio_route = true,
 #if CONFIG_EXAMPLE_BOARD_WAVESHARE_216 || CONFIG_EXAMPLE_BOARD_WAVESHARE_175C || CONFIG_EXAMPLE_BOARD_WAVESHARE_349 || CONFIG_EXAMPLE_BOARD_WAVESHARE_154G || CONFIG_EXAMPLE_BOARD_WAVESHARE_P4_35
         .buttons = buttons,
         .button_count = sizeof(buttons) / sizeof(buttons[0]),

@@ -661,6 +661,7 @@ class Link:
         self.state = 0
         self.led = 0
         self.audio_capable = False
+        self.audio_route = False    # the board lets the viewer hear its speaker alone and lend it a microphone
         self.audio = queue.Queue(maxsize=8)
         self.changes = 0            # frames that changed pixels
         self.live = False
@@ -743,7 +744,7 @@ class Link:
             self.disconnect()
 
     def disconnect(self):
-        self.audio_capable = False
+        self.audio_capable = self.audio_route = False
         self.text_open = False
         self.led = 0
         while not self.audio.empty():
@@ -898,6 +899,7 @@ class Link:
                             self.fb = np.zeros((info["h"], info["w"]), "<u2")
                             self.seen = np.zeros((info["h"], info["w"]), bool)
                         self.audio_capable = bool(info.get("audio", False))
+                        self.audio_route = self.audio_capable and bool(info.get("route", False))
                         self.text_open = False
                         self.send(b"O")               # this viewer types: the board says when a field opens
                         self.have_board = True
@@ -1578,7 +1580,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
         p.restore()
         grad_fill(p, rounded(L["glass"], L["glass_r"]), -70, rgb(255, 255, 255, .07), rgb(255, 255, 255, 0))
 
-    def paint_button(p, name, br, recording, lit, enabled):
+    def paint_button(p, name, br, recording, lit, enabled, mode=0):
         x, y, w, h = br
         cx, cy = x + w / 2, y + h / 2
         ink = rgb(0xdd, 0xdd, 0xdd)
@@ -1627,6 +1629,20 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             p.drawRoundedRect(QRectF(cx - 9, cy - 4, 18, 12), 2, 2)
             p.drawEllipse(QRectF(cx - 3.5, cy - 1.5, 7, 7))
             p.fillRect(QRectF(cx - 4, cy - 7, 8, 3), ink)
+        if mode:                    # where the sound goes, under the icon: both the board and here, or here alone
+            text = "BOTH" if mode == 1 else "PC"
+            f = font(7.5)
+            f.setBold(True)
+            fm = QFontMetricsF(f)
+            tw, th = fm.horizontalAdvance(text) + 7, fm.height() + 1
+            tag = QRectF(cx - tw / 2, y + h - th + 3, tw, th)
+            p.setOpacity(1)
+            p.setPen(pen(rgb(0x14, 0x14, 0x18), 1.25))
+            p.setBrush(rgb(0xf2, 0xf2, 0xf2))
+            p.drawRoundedRect(tag, th / 2, th / 2)
+            p.setPen(rgb(0x14, 0x14, 0x18))
+            p.setFont(f)
+            p.drawText(tag, CENTER, text)
         p.restore()
 
     PLACEHOLDER = dict(name="", w=240, h=240, round=False, diag=0, touch=False, buttons=[])
@@ -1802,7 +1818,10 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                 lit = name == "rec" and self.rec is not None or name == "shot" and now < self.flash_until + .4
                 lit = lit or name == "talk" and self.audio_io.talk_link is not None or name == "listen" and self.audio_io.listen_link is not None
                 enabled = name not in ("talk", "listen") or self.active_dev.link.live and self.active_dev.link.audio_capable
-                paint_button(p, name, br, self.rec is not None, lit, enabled)
+                link = self.active_dev.link
+                mode = (self.audio_io.speaker_mode(link) if name == "listen" else
+                        self.audio_io.mic_mode(link) if name == "talk" else 0)
+                paint_button(p, name, br, self.rec is not None, lit, enabled, mode)
             if self.toast and now < self.toast[1]:            # the toast, under the buttons
                 f = font(11)
                 fm = QFontMetricsF(f)
@@ -2043,7 +2062,7 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             if d is not None:
                 self.active_dev = d
             if what in ("talk", "listen"):
-                self.audio_action(what, 2)
+                self.audio_cycle(what)
                 return
             if what in ("rec", "shot", "close"):
                 self.button_down = what
@@ -2249,6 +2268,22 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
             super().changeEvent(e)
 
         # -- menu -------------------------------------------------------------------------------------------
+        def audio_cycle(self, what):
+            """The icons step through off, the board and this computer, this computer alone."""
+            link = self.active_dev.link
+            if not link.live or not link.audio_capable:
+                self.notice("Selected board does not offer audio")
+                return
+            if what == "listen":
+                mode = self.audio_io.cycle_speaker(link)
+                self.notice(("Sound off", "Sound: board and computer", "Sound: computer only")[mode])
+            elif link.audio_route:
+                mode = self.audio_io.cycle_mic(link)
+                self.notice(("Microphone off", "Microphone: board's and yours", "Microphone: yours only")[mode])
+            else:
+                self.audio_action("talk")
+            self.update()
+
         def audio_action(self, action, source=2):
             link = self.active_dev.link
             if not link.live or not link.audio_capable:

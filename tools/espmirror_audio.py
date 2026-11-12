@@ -68,6 +68,8 @@ class AudioSession:
         self.permission_pending = False
         self.closed = False
         self.listen_source = 0
+        self.listen_solo = False        # the board's speaker silent while the viewer hears it
+        self.talk_lend = 0              # 0 talk through the speaker; the board's microphone with ours 1, ours alone 2
         self.sink = self.source = self.output = self.input = None
         self.pending = bytearray()
         self.capture_pending = bytearray()
@@ -89,12 +91,15 @@ class AudioSession:
 
     def stop_listen(self):
         if self.listen_link:
+            if self.listen_solo:
+                self.listen_link.send(bytes([9, 0]))
             self.listen_link.send(bytes([7, 0]))
         if self.sink:
             self.sink.stop()
             self.sink.deleteLater()
         self.listen_link = self.sink = self.output = None
         self.listen_source = 0
+        self.listen_solo = False
         self.pending.clear()
 
     def listen(self, link, source):
@@ -128,8 +133,9 @@ class AudioSession:
             self.source.stop()
             self.source.deleteLater()
         if self.talk_link:
-            self.talk_link.send(bytes([8, 0]))
+            self.talk_link.send(bytes([10, 0]) if self.talk_lend else bytes([8, 0]))
         self.talk_link = self.source = self.input = None
+        self.talk_lend = 0
         self.capture_pending.clear()
 
     def microphone_permission(self, start):
@@ -160,12 +166,45 @@ class AudioSession:
             app.requestPermission(permission, self.parent, granted)
 
     def talk(self, link):
-        same = self.talk_link is link
+        same = self.talk_link is link and not self.talk_lend
         self.stop_talk()
         if not same:
             self.microphone_permission(lambda: self.start_talk(link))
 
-    def start_talk(self, link):
+    def speaker_mode(self, link):
+        """0 off, 1 on the board and here, 2 here alone."""
+        if self.listen_link is not link or self.listen_source != 2:
+            return 0
+        return 2 if self.listen_solo else 1
+
+    def mic_mode(self, link):
+        """0 off, 1 our microphone with the board's, 2 ours alone; talk through the speaker counts as off."""
+        return self.talk_lend if self.talk_link is link else 0
+
+    def cycle_speaker(self, link):
+        mode = (self.speaker_mode(link) + 1) % (3 if getattr(link, 'audio_route', False) else 2)
+        if mode == 0:
+            self.stop_listen()
+        elif mode == 1:
+            self.listen(link, 2)
+        else:
+            link.send(bytes([9, 1]))
+            self.listen_solo = True
+        return mode
+
+    def cycle_mic(self, link):
+        mode = (self.mic_mode(link) + 1) % 3
+        if mode == 0:
+            self.stop_talk()
+        elif mode == 1:
+            self.stop_talk()
+            self.microphone_permission(lambda: self.start_talk(link, 1))
+        else:
+            link.send(bytes([10, 2]))
+            self.talk_lend = 2
+        return mode
+
+    def start_talk(self, link, lend=0):
         if self.closed or not link.live:
             return
         try:
@@ -177,8 +216,8 @@ class AudioSession:
             self.input = self.source.start()
             if self.input is None:
                 raise ValueError('Cannot start microphone; check OS microphone permission')
-            self.talk_link = link
-            link.send(bytes([8, 1]))
+            self.talk_link, self.talk_lend = link, lend
+            link.send(bytes([10, lend]) if lend else bytes([8, 1]))
             self.input.readyRead.connect(self.capture)
         except (ValueError, RuntimeError) as error:
             self.stop_talk()
@@ -193,7 +232,7 @@ class AudioSession:
             del self.capture_pending[:640]
             # Do not queue seconds of stale microphone data behind a blocked cable.
             if self.talk_link.out.qsize() < 16:
-                self.talk_link.send(b'S\x01' + pcm)
+                self.talk_link.send((b'S\x02' if self.talk_lend else b'S\x01') + pcm)
 
     def pump(self):
         if self.talk_link and not self.talk_link.live:

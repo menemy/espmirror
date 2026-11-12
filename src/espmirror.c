@@ -168,6 +168,14 @@ static uint32_t s_aud_w, s_aud_r;
 static volatile uint8_t s_aud_src;   /* 0 off, 1 the microphone, 2 the speaker */
 static portMUX_TYPE s_aud_mux = portMUX_INITIALIZER_UNLOCKED;
 static bool s_talk;                  /* the viewer's microphone plays through the speaker */
+/* Where the sound goes: the speaker for the viewer alone (1), the viewer's microphone with the
+ * board's (1) or instead of it (2). The viewer's microphone waits in a ring of samples. */
+#define MIC_RING 2048                /* 128 ms */
+#define MIC_KEEP 1280                /* behind by more than MIC_RING - this: skip to the newest 80 ms */
+static volatile uint8_t s_route_out, s_route_in;
+static int16_t s_mic[MIC_RING];
+static uint32_t s_mic_w, s_mic_r;
+static portMUX_TYPE s_mic_mux = portMUX_INITIALIZER_UNLOCKED;
 #endif
 
 static bool tcp_send(int fd, const void *a, size_t na, const void *b, size_t nb, int ms);
@@ -383,6 +391,58 @@ void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
     }
 }
 
+void espmirror_audio_output(int16_t *pcm, size_t frames, int channels) {
+    espmirror_audio_playback(pcm, frames, channels);
+    if (__atomic_load_n(&s_route_out, __ATOMIC_RELAXED)) memset(pcm, 0, frames * (channels > 1 ? channels : 1) * sizeof(*pcm));
+}
+
+void espmirror_audio_input(int16_t *mono, size_t samples) {
+    uint8_t mode = __atomic_load_n(&s_route_in, __ATOMIC_RELAXED);
+    for (size_t at = 0; mode && at < samples; at += 320) {       /* 20 ms at a time under the lock */
+        size_t want = samples - at < 320 ? samples - at : 320, n;
+        portENTER_CRITICAL(&s_mic_mux);
+        uint32_t have = s_mic_w - s_mic_r;
+        n = have < want ? have : want;
+        for (size_t i = 0; i < n; i++) {
+            int32_t v = s_mic[(s_mic_r + i) % MIC_RING] + (mode == 2 ? 0 : mono[at + i]);
+            mono[at + i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+        }
+        s_mic_r += n;
+        portEXIT_CRITICAL(&s_mic_mux);
+        if (mode == 2) memset(mono + at + n, 0, (want - n) * sizeof(*mono));
+    }
+    espmirror_audio_capture(mono, samples);
+}
+
+bool espmirror_audio_input_wanted(void) {
+    return __atomic_load_n(&s_route_in, __ATOMIC_RELAXED) != 0;
+}
+
+/* Mirror task: the viewer's microphone, for the board's to take. */
+static void mic_put(const uint8_t *pcm, size_t samples) {
+    portENTER_CRITICAL(&s_mic_mux);
+    if (s_mic_w - s_mic_r + samples > MIC_RING) s_mic_r = s_mic_w + samples - MIC_KEEP;
+    for (size_t i = 0; i < samples; i++) {
+        s_mic[(s_mic_w + i) % MIC_RING] = (int16_t)(pcm[2 * i] | pcm[2 * i + 1] << 8);
+    }
+    s_mic_w += samples;
+    portEXIT_CRITICAL(&s_mic_mux);
+}
+
+/* Mirror task: where the viewer wants the sound; both back to the board when it leaves. */
+static void route_set(uint8_t out, uint8_t in) {
+    if (!s_cfg.audio_route) return;
+    if (out != s_route_out) ESP_LOGI(TAG, "speaker plays %s", out ? "for the viewer only" : "on the board");
+    if (in != s_route_in) {
+        portENTER_CRITICAL(&s_mic_mux);
+        s_mic_r = s_mic_w;
+        portEXIT_CRITICAL(&s_mic_mux);
+        ESP_LOGI(TAG, "microphone: %s", in == 2 ? "the viewer's" : in ? "the board's and the viewer's" : "the board's");
+    }
+    __atomic_store_n(&s_route_out, out, __ATOMIC_RELAXED);
+    __atomic_store_n(&s_route_in, in, __ATOMIC_RELAXED);
+}
+
 /* Mirror task: the viewer listens to a source, or stops. */
 static void audio_set(uint8_t src) {
     if (src > 2 || src == __atomic_load_n(&s_aud_src, __ATOMIC_RELAXED)) return;
@@ -452,6 +512,21 @@ void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels) {
     (void)pcm;
     (void)frames;
     (void)channels;
+}
+
+void espmirror_audio_output(int16_t *pcm, size_t frames, int channels) {
+    (void)pcm;
+    (void)frames;
+    (void)channels;
+}
+
+void espmirror_audio_input(int16_t *mono, size_t samples) {
+    (void)mono;
+    (void)samples;
+}
+
+bool espmirror_audio_input_wanted(void) {
+    return false;
 }
 #endif
 
@@ -572,7 +647,16 @@ static void input(const uint8_t *buf, size_t len) {
         talk_set(buf[1] != 0);
         return;
     }
+    if (len == 2 && buf[0] == 9) {
+        route_set(buf[1] == 1, s_route_in);
+        return;
+    }
+    if (len == 2 && buf[0] == 10) {
+        route_set(s_route_out, buf[1] <= 2 ? buf[1] : 0);
+        return;
+    }
     if (len > 2 && len <= 642 && buf[0] == 'S') {
+        if (s_route_in && buf[1] == 2 && (len - 2) % 2 == 0) mic_put(buf + 2, (len - 2) / 2);
         if (s_talk && s_cfg.on_talk_audio && buf[1] == 1 && (len - 2) % 2 == 0) {
             int16_t pcm[(IN_MAX - 2) / 2];               /* aligned: the message buffer's offset is odd */
             memcpy(pcm, buf + 2, len - 2);
@@ -605,6 +689,7 @@ static void tcp_drop(void) {
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
     talk_set(false);
+    route_set(0, 0);
 #endif
 #if CONFIG_ESPMIRROR_TCP
     close(s_cfd);
@@ -805,6 +890,7 @@ static void serial_end(void)
 #if CONFIG_ESPMIRROR_AUDIO
     audio_set(0);
     talk_set(false);
+    route_set(0, 0);
 #endif
     if (s_cfg.on_viewer) s_cfg.on_viewer(false, s_cfg.user);
     pointer_put(s_ptr_x, s_ptr_y, false);
@@ -1365,11 +1451,12 @@ static esp_err_t start(const espmirror_config_t *config) {
     s_board_len = snprintf(s_board, sizeof(s_board),
         "B{\"version\":2,\"name\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
         "\"w\":%d,\"h\":%d,\"round\":%s,\"diag\":%.3f,\"touch\":%s,\"keyboard\":%s,"
-        "\"audio\":%s,\"buttons\":[",
+        "\"audio\":%s,\"route\":%s,\"buttons\":[",
         s_name, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], s_w, s_h,
         is_round ? "true" : "false",
         (double)diagonal, (config->touch || config->on_pointer) ? "true" : "false",
-        config->keyboard ? "true" : "false", CONFIG_ESPMIRROR_AUDIO ? "true" : "false");
+        config->keyboard ? "true" : "false", CONFIG_ESPMIRROR_AUDIO ? "true" : "false",
+        CONFIG_ESPMIRROR_AUDIO && config->audio_route ? "true" : "false");
     for (size_t i = 0; i < (config->button_count ? config->button_count : 3); i++) {
         int role = config->button_count ? config->buttons[i].role : (int)i + 1;
         int x = config->button_count ? config->buttons[i].x : -1;

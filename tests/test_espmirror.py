@@ -555,6 +555,25 @@ class CableFramingTests(unittest.TestCase):
                     result = subprocess.run([exe], capture_output=True, timeout=10)
                     self.assertEqual(result.returncode, 0, result.stderr.decode())
 
+    @unittest.skipUnless(os.name == 'posix', 'C harness requires a POSIX sanitizer toolchain')
+    def test_sound_routing(self):
+        source = (ROOT / 'src/espmirror.c').read_text()
+        state = source[source.index('#define MIC_RING'):source.index('#endif', source.index('#define MIC_RING'))]
+        impl = source[source.index('void espmirror_audio_output'):
+                      source.index('/* Mirror task: the viewer listens to a source, or stops. */')]
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            (folder / 'route_impl.inc').write_text(state + impl)
+            exe = folder / 'route-harness'
+            command = shlex.split(os.environ.get('CC', 'cc')) + [
+                '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
+                '-I' + str(folder), str(ROOT / 'tests/espmirror_route_harness.c'), '-o', str(exe)]
+            result = subprocess.run(command, capture_output=True, text=True,
+                                    env={**os.environ, 'TMPDIR': tempfile.gettempdir()})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([exe], capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+
     def test_windows_port_names(self):
         for port in ('COM1', 'com12', r'\\.\COM32'):
             self.assertTrue(mirror.is_port(port), port)

@@ -63,6 +63,7 @@ static void keys_release(void) { held = 0; }
 #if CONFIG_ESPMIRROR_AUDIO
 static void audio_set(int flags) { (void)flags; }
 static void talk_set(bool enabled) { (void)enabled; }
+static void route_set(uint8_t out, uint8_t in) { (void)out; (void)in; }
 #endif
 static int text_resets;
 static void text_reset(void) { text_resets++; }

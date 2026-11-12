@@ -75,6 +75,11 @@ typedef struct {
     bool (*on_talk)(bool on, void *user);
     void (*on_talk_audio)(const int16_t *mono, size_t samples, void *user);
 
+    /* The app passes its speaker and microphone samples through espmirror_audio_output() and
+     * espmirror_audio_input(): the viewer may then hear the speaker alone and lend its
+     * microphone to the board. */
+    bool audio_route;
+
     void *user;
 
     bool round;
@@ -150,6 +155,15 @@ void espmirror_set_led(uint8_t mode);
  * Any task. Without CONFIG_ESPMIRROR_AUDIO they compile to nothing. */
 void espmirror_audio_capture(const int16_t *mono, size_t samples);
 void espmirror_audio_playback(const int16_t *pcm, size_t frames, int channels);
+
+/* The same copies, routed (audio_route): the speaker's samples just before the codec, silenced in
+ * place while the viewer hears them alone; the microphone's just after the codec, with the
+ * viewer's microphone mixed in or in their place while it lends it. Any task. */
+void espmirror_audio_output(int16_t *pcm, size_t frames, int channels);
+void espmirror_audio_input(int16_t *mono, size_t samples);
+
+/* True while the viewer lends its microphone: keep reading the board's, it paces the viewer's. */
+bool espmirror_audio_input_wanted(void);
 
 /* True while a viewer is connected. */
 bool espmirror_connected(void);

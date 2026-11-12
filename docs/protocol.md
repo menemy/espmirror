@@ -212,7 +212,7 @@ requires explicit take-back. Host writers cannot outlive their session.
 ```
 {"version":2,"name":"Virtual S3","mac":"aa:bb:cc:dd:ee:ff",
  "w":320,"h":240,"round":false,"diag":2.0,"touch":true,
- "keyboard":false,"audio":true,
+ "keyboard":false,"audio":true,"route":true,
  "buttons":[{"role":2,"name":"BOOT","x":-1,"y":-1}]}
 ```
 
@@ -220,8 +220,9 @@ Required geometry is `w`, `h`. `diag` is in inches: the diameter for a round
 screen, the diagonal otherwise. When deriving it from `ppi`, firmware uses
 `min(w,h)/ppi` for round screens and `hypot(w,h)/ppi` otherwise.
 `name`, `mac`, `round`, `diag`, `touch`,
-`keyboard`, and `buttons` share Muse's flat layout. `version` and `audio` are
-optional additions; absent audio means unavailable. `(-1,-1)` has no position
+`keyboard`, and `buttons` share Muse's flat layout. `version`, `audio` and
+`route` are optional additions; absent audio means unavailable. `route` means
+the firmware passes its samples through the component, so 09 and 0A below act. `(-1,-1)` has no position
 hint. Keys 1..10 are passed unchanged to callbacks. Labels identify board
 functions. Existing espmirror API constants remain AUX=1, MAIN=2, POWER=3;
 Muse uses talk=1, aux=2, power=3, speaker=4, navigation=5..10. The wire does not
@@ -288,14 +289,20 @@ configurable 8..64 KiB; TCP host limit is 1 MiB. A send deadline is three second
 | 06 key:u8 down:u8 | held/released, independently of pending tap |
 | 07 source:u8 | listen: 0 off, 1 microphone, 2 speaker |
 | 08 enabled:u8 | request talk through the speaker |
-| S 01 PCM | signed PCM16 mono 16000 Hz, at most 320 samples (20 ms) |
+| 09 mode:u8 | speaker: 0 plays on the board, 1 silent there while the viewer hears it |
+| 0A mode:u8 | microphone: 0 the board's, 1 the board's with the viewer's, 2 the viewer's alone |
+| S 01 PCM | talk: signed PCM16 mono 16000 Hz, at most 320 samples (20 ms) |
+| S 02 PCM | the viewer's microphone for 0A, in the same format |
 | R | reset reference and refresh entire screen |
 | O | this viewer types: report text fields with O |
 | I UTF-8 | insert 1..63 bytes of whole UTF-8 characters, no NUL, at the field's cursor |
 | K edit:u8 | 1 Backspace, 2 Delete, 3 Left, 4 Right, 5 Enter |
 
 The application may refuse talk. There is no talk-acceptance response in this
-version; an accepted session calls on_talk_audio. Disconnect stops listen/talk,
+version; an accepted session calls on_talk_audio. Boards without `route` ignore
+09, 0A and S 02. The board keeps at most 128 ms of the viewer's microphone and
+skips to the newest 80 ms when it falls behind; with mode 2 a gap is silence.
+Disconnect returns both modes to 0, stops listen/talk,
 releases held keys, and queues pointer release. Pointer press, first movement,
 and release are separate LVGL samples; later motion samples may coalesce.
 Out-of-range coordinates and unknown payloads have no input action.

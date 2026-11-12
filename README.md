@@ -126,7 +126,11 @@ e-paper frame, a camera image).
 gives, `espmirror_audio_playback()` with what the speaker gets (both PCM16 at
 16 kHz), `espmirror_set_led()`, `espmirror_set_screen_state()` when the
 panel dims or sleeps. The viewer's own microphone comes back through
-`on_talk` and `on_talk_audio` in the config.
+`on_talk` and `on_talk_audio` in the config. With `audio_route` set, pass the samples
+through `espmirror_audio_output()` just before the codec and
+`espmirror_audio_input()` just after it instead: the viewer can then hear the
+speaker alone and lend the board its microphone, alongside the board's or in
+its place. Keep reading the microphone while `espmirror_audio_input_wanted()`.
 
 ## Transports
 
