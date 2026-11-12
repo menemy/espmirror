@@ -1379,7 +1379,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
 
     def place_keys(look, brect, body_r, disc, active, grect, s, frame=None):
         """Each button on the body's edge nearest its hint, at the hint's place along it (on the rim, at its
-        angle, for a disc); buttons without a hint along the bottom."""
+        angle, for a disc); buttons without a hint where the profile has them, or along the bottom of a device
+        without a profile."""
         bx, by, bw, bh = brect
         ax, ay, aw, ah = active
         cw, ch = look["w"], look["h"]
@@ -1402,8 +1403,8 @@ def run_window(targets, scale, on_top, wall, devices_dir, log_file=None, sound=F
                                          w=diameter * s, h=diameter * s, face=True))
                     else:
                         edges[edge].append([pos * s, b])
-                else:
-                    loose.append(b)
+                elif not defaults:
+                    loose.append(b)                # a known device has the keys its profile lists, no others
                 continue
             hx, hy = ax + min(x + .5, cw) / cw * aw, ay + min(y + .5, ch) / ch * ah
             if disc:

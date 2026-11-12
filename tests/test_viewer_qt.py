@@ -52,6 +52,13 @@ def check():
                 assert d.link.out.get_nowait() == bytes([6, role, 0])
             else:
                 assert first == bytes([3, role])
+        d = win.devs[1]
+        info = dict(fake_board.PRESETS['waveshare-s3-154g'],
+                    buttons=[dict(role=r, name=n, x=-1, y=-1) for r, n in ((1, 'AUX'), (2, 'MAIN'), (3, 'POWER'))])
+        win.on_board(1, info)
+        win.arrange()
+        assert sorted(k['role'] for k in d.L['keys']) == [2, 3]     # the 1.54G has no third key to draw
+        win.on_board(1, fake_board.PRESETS['waveshare-s3-154g'])
         with tempfile.TemporaryDirectory() as folder:
             renders = []
             for state in range(3):
