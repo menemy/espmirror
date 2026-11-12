@@ -63,8 +63,24 @@ static const char *TAG = "lvgl";
 #define RATE 16000
 #define CHUNK 320                      /* 20 ms of audio */
 #define SMALL (UI_W < 200 || UI_H < 200)   /* a 128 px screen: smaller type, icons for words, no status line */
-#define SPEC_W (UI_W - 16)
-#define SPEC_H (SMALL ? 32 : (UI_H - 156 > 40 ? UI_H - 156 : 40))   /* under the status line: 44 rows at 200, 84 at 240 */
+#define LARGE (UI_W >= 400 && UI_H >= 400) /* a 480 px screen: everything about twice the size */
+#if CONFIG_EXAMPLE_BOARD_WAVESHARE_216
+#define CORNER 80                          /* the 2.16's panel hides pixels in a corner of about this radius */
+#else
+#define CORNER 0
+#endif
+#define SPEC_X (LARGE ? 28 : 8)
+#define SPEC_W (UI_W - 2 * SPEC_X)
+#define SPEC_BOTTOM (SMALL ? 4 : LARGE ? 34 : 6)
+#define SPEC_H (SMALL ? 32 : LARGE ? UI_H - SPEC_BOTTOM - 330 : (UI_H - 156 > 40 ? UI_H - 156 : 40))   /* under the status line: 44 rows at 200, 84 at 240 */
+#define RIPPLE (SMALL ? 18 : LARGE ? 44 : 28)
+#if LARGE
+#define FONT_TITLE (&lv_font_montserrat_28)
+#define FONT_TEXT (&lv_font_montserrat_20)
+#else
+#define FONT_TITLE (SMALL ? &lv_font_montserrat_14 : &lv_font_montserrat_24)
+#define FONT_TEXT (&lv_font_montserrat_14)
+#endif
 #define FFT_N 128
 
 /* ---- Sound: three small sounds, synthesised, 16 kHz mono --------------------- */
@@ -273,8 +289,7 @@ static lv_obj_t *mic_part(lv_obj_t *parent, int w, int h, int dx, int dy, int ra
     return o;
 }
 
-static void mic_icon(lv_obj_t *btn, bool small) {
-    int u = small ? 1 : 2;                                   /* the unit: 12 px tall at 128, 24 px otherwise */
+static void mic_icon(lv_obj_t *btn, int u) {               /* u: the unit, the icon is 12 u tall */
     mic_part(btn, 5 * u, 8 * u, 0, -2 * u, LV_RADIUS_CIRCLE); /* the capsule */
     mic_part(btn, 1 * u, 3 * u, 0, 3 * u, 0);                /* the stem */
     mic_part(btn, 6 * u, 1 * u, 0, 5 * u, 0);                /* the base */
@@ -317,24 +332,27 @@ static void build_ui(void) {
 #endif
 
     /* Rows, from the top: the title, the LEDs, the buttons, the ball, the bar, (the status), the spectrogram. */
-    const int pad = SMALL ? 6 : 10, gap = SMALL ? 6 : 10;
-    const int y_led = SMALL ? 26 : 42, y_btn = SMALL ? 36 : 58, h_btn = SMALL ? 22 : 30;
-    const int y_ball = SMALL ? 64 : 92, ball_px = SMALL ? 12 : 18, bounce = SMALL ? 10 : 14, y_bar = SMALL ? 84 : 124;
+    const int pad = SMALL ? 6 : LARGE ? 24 : 10, gap = SMALL ? 6 : LARGE ? 14 : 10;
+    const int y_led = SMALL ? 26 : LARGE ? 86 : 42, y_btn = SMALL ? 36 : LARGE ? 112 : 58, h_btn = SMALL ? 22 : LARGE ? 72 : 30;
+    const int y_ball = SMALL ? 64 : LARGE ? 214 : 92, ball_px = SMALL ? 12 : LARGE ? 28 : 18;
+    const int bounce = SMALL ? 10 : LARGE ? 22 : 14, y_bar = SMALL ? 84 : LARGE ? 268 : 124;
+    const int led_px = SMALL ? 8 : LARGE ? 16 : 12, spin_px = SMALL ? 18 : LARGE ? 40 : 28;
     const int w_btn = (UI_W - 2 * pad - 3 * gap) / 4;   /* three sounds and the microphone */
+    const int edge = CORNER ? CORNER * 11 / 20 : pad;   /* the top row, clear of rounded corners */
 
     lv_obj_t *title = lv_label_create(scr);
     lv_label_set_text(title, "espmirror");
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_set_style_text_font(title, SMALL ? &lv_font_montserrat_14 : &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(title, pad, SMALL ? 6 : 8);
+    lv_obj_set_style_text_font(title, FONT_TITLE, 0);
+    lv_obj_set_pos(title, edge, SMALL ? 6 : LARGE ? 32 : 8);
 
     lv_obj_t *spinner = lv_spinner_create(scr);
     lv_spinner_set_anim_params(spinner, 1200, 90);
-    lv_obj_set_size(spinner, SMALL ? 18 : 28, SMALL ? 18 : 28);
-    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : 4, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : 4, LV_PART_INDICATOR);
+    lv_obj_set_size(spinner, spin_px, spin_px);
+    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : LARGE ? 6 : 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(spinner, SMALL ? 3 : LARGE ? 6 : 4, LV_PART_INDICATOR);
     lv_obj_set_style_arc_color(spinner, lv_color_hex(0x33d17a), LV_PART_INDICATOR);
-    lv_obj_align(spinner, LV_ALIGN_TOP_RIGHT, -pad, SMALL ? 4 : 8);
+    lv_obj_align(spinner, LV_ALIGN_TOP_RIGHT, -edge, SMALL ? 4 : LARGE ? 28 : 8);
 
     /* Three LEDs for the three keys; three buttons for the three sounds and one for the microphone
      * (icons where words do not fit). */
@@ -356,17 +374,17 @@ static void build_ui(void) {
             s_mic_btn = btn;
         }
         if (i == 3) {
-            mic_icon(btn, SMALL);
+            mic_icon(btn, SMALL ? 1 : LARGE ? 4 : 2);
             continue;
         }
         lv_obj_t *l = lv_label_create(btn);
         lv_label_set_text(l, SMALL ? icons[i] : names[i]);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(l, FONT_TEXT, 0);
         lv_obj_center(l);
 
         s_leds[i + 1] = lv_led_create(scr);
-        lv_obj_set_size(s_leds[i + 1], SMALL ? 8 : 12, SMALL ? 8 : 12);
-        lv_obj_set_pos(s_leds[i + 1], pad + i * (w_btn + gap) + w_btn / 2 - (SMALL ? 4 : 6), y_led);
+        lv_obj_set_size(s_leds[i + 1], led_px, led_px);
+        lv_obj_set_pos(s_leds[i + 1], pad + i * (w_btn + gap) + (w_btn - led_px) / 2, y_led);
         lv_led_set_color(s_leds[i + 1], lv_color_hex(0x33d17a));
         lv_led_off(s_leds[i + 1]);
     }
@@ -399,7 +417,7 @@ static void build_ui(void) {
     lv_anim_start(&a);
 
     lv_obj_t *bar = lv_bar_create(scr);
-    lv_obj_set_size(bar, UI_W - 2 * pad, SMALL ? 4 : 6);
+    lv_obj_set_size(bar, UI_W - 2 * pad, SMALL ? 4 : LARGE ? 10 : 6);
     lv_obj_set_pos(bar, pad, y_bar);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x2a2e3a), LV_PART_MAIN);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x5b8def), LV_PART_INDICATOR);
@@ -423,17 +441,17 @@ static void build_ui(void) {
     s_canvas = lv_canvas_create(scr);
     lv_canvas_set_draw_buf(s_canvas, &s_spec_buf);
     lv_canvas_fill_bg(s_canvas, lv_color_hex(0x0b0c10), LV_OPA_COVER);
-    lv_obj_set_pos(s_canvas, 8, UI_H - SPEC_H - (SMALL ? 4 : 6));
+    lv_obj_set_pos(s_canvas, SPEC_X, UI_H - SPEC_H - SPEC_BOTTOM);
 
     s_status = lv_label_create(scr);
     lv_obj_set_style_text_color(s_status, lv_color_hex(0x8a8f9a), 0);
-    lv_obj_set_style_text_font(s_status, &lv_font_montserrat_14, 0);
-    lv_obj_set_pos(s_status, 10, 130);
+    lv_obj_set_style_text_font(s_status, FONT_TEXT, 0);
+    lv_obj_set_pos(s_status, LARGE ? SPEC_X : 10, LARGE ? 292 : 130);
     if (SMALL) lv_obj_add_flag(s_status, LV_OBJ_FLAG_HIDDEN);   /* no room: the line stays in the log */
 
     /* The ripple under a touch, hidden until one. */
     s_ripple = lv_obj_create(lv_screen_active());
-    lv_obj_set_size(s_ripple, SMALL ? 18 : 28, SMALL ? 18 : 28);
+    lv_obj_set_size(s_ripple, RIPPLE, RIPPLE);
     lv_obj_set_style_radius(s_ripple, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(s_ripple, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_bg_opa(s_ripple, LV_OPA_40, 0);
@@ -541,7 +559,7 @@ static void lv_task(void *arg) {
         py = s_pointer.y;
         portEXIT_CRITICAL(&s_pointer_mux);
         if (down) {
-            lv_obj_set_pos(s_ripple, px - (SMALL ? 9 : 14), py - (SMALL ? 9 : 14));
+            lv_obj_set_pos(s_ripple, px - RIPPLE / 2, py - RIPPLE / 2);
             lv_obj_clear_flag(s_ripple, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_ripple, LV_OBJ_FLAG_HIDDEN);
@@ -555,7 +573,7 @@ static void lv_task(void *arg) {
         TickType_t now = xTaskGetTickCount();
         if (now - last >= pdMS_TO_TICKS(500)) {
             last = now;
-            lv_label_set_text_fmt(s_status, "%s  ·  %lu s  ·  %s", espmirror_connected() ? "viewer on" : "no viewer",
+            lv_label_set_text_fmt(s_status, "%s  |  %lu s  |  %s", espmirror_connected() ? "viewer on" : "no viewer",
                                   (unsigned long)(esp_timer_get_time() / 1000000),
                                   mic_wanted() ? "mic" : __atomic_load_n(&s_playing, __ATOMIC_RELAXED) ? "playing" : "quiet");
         }
