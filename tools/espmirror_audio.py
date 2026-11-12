@@ -134,6 +134,10 @@ class AudioSession:
 
     def microphone_permission(self, start):
         from PySide6.QtCore import QCoreApplication, QMicrophonePermission, Qt
+        from espmirror_macos import declares_microphone
+        if not declares_microphone():
+            start()                 # Qt would refuse without asking; the system asks for the terminal instead
+            return
         app = QCoreApplication.instance()
         permission = QMicrophonePermission()
         status = app.checkPermission(permission)

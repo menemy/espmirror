@@ -2524,6 +2524,12 @@ def main():
     from espmirror_settings import DEFAULTS, edit_preferences, read_preferences, validate_hosts
     preferences = DEFAULTS.copy()
     graphical = not (args.list or args.stats or args.png)
+    if graphical and not args.settings:
+        from espmirror_macos import adopt, relaunch
+        adopt()
+        code = relaunch(sys.argv[1:])
+        if code is not None:
+            return code
     if args.settings or graphical:
         if importlib.util.find_spec("PySide6") is None:
             print("the window needs PySide6: pip install PySide6 zeroconf numpy", file=sys.stderr)

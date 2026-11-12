@@ -72,6 +72,17 @@ class AudioTests(unittest.TestCase):
         self.assertEqual(link.out.get_nowait(), b'\x03\x02')
         self.assertEqual(link.out.get_nowait(), b'\x06\x03\x01')
 
+    def test_microphone_without_a_declared_use_starts_at_once(self):
+        core = SimpleNamespace(QCoreApplication=SimpleNamespace(instance=Mock()), QMicrophonePermission=Mock(),
+                               Qt=SimpleNamespace(PermissionStatus=SimpleNamespace(Granted=1, Denied=2)))
+        session = AudioSession.__new__(AudioSession)
+        start = Mock()
+        with patch.dict(sys.modules, {'PySide6.QtCore': core}), \
+                patch('espmirror_macos.declares_microphone', return_value=False):
+            session.microphone_permission(start)
+        start.assert_called_once_with()
+        core.QCoreApplication.instance.assert_not_called()
+
     def test_microphone_permission(self):
         statuses = SimpleNamespace(Granted=1, Denied=2, Undetermined=3)
         app = Mock()
@@ -82,7 +93,8 @@ class AudioTests(unittest.TestCase):
         session.permission_pending = session.closed = False
         session.report = Mock()
         start = Mock()
-        with patch.dict(sys.modules, {'PySide6.QtCore': core}):
+        with patch.dict(sys.modules, {'PySide6.QtCore': core}), \
+                patch('espmirror_macos.declares_microphone', return_value=True):
             app.checkPermission.return_value = statuses.Denied
             session.microphone_permission(start)
             start.assert_not_called()
